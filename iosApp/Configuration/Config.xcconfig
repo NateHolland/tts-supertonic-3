@@ -1,0 +1,6 @@
+// Xcode build configuration for TTS SDK iOS Sample App
+// This file is referenced by the Xcode project
+
+TEAM_ID =
+PRODUCT_BUNDLE_IDENTIFIER = com.ttssdk.sample
+KOTLIN_FRAMEWORK_BUILD_TYPE = debug
