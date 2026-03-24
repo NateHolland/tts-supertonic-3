@@ -13,8 +13,9 @@
 /.idea/
 .DS_Store
 
-# Local config
+# Local config (contains credentials — never commit)
 local.properties
+gradle.properties
 
 # Model files (downloaded via ./download_model.sh)
 iosApp/Supertone_supertonic-2/

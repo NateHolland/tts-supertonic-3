@@ -1,81 +1,104 @@
-# TTS SDK
+# TTS Supertonic 2
 
-Kotlin Multiplatform on-device Text-to-Speech library using ONNX Runtime.
-Replaces CopiloTTS with a new in-house KMP library targeting the supertonic-2 model.
+Kotlin Multiplatform on-device text-to-speech SDK powered by [Supertone supertonic-2](https://huggingface.co/Supertone/supertonic-2) and ONNX Runtime. Runs entirely on-device with no network calls at inference time.
 
-Targets: Android (API 26+), iOS (16+)
+Targets: **Android** (API 26+) · **iOS** (16+)
 
 ## Project Structure
 
 ```
-tts-sdk/
-  library/                  # KMP library module
-    commonMain/             # Shared API + orchestration
-    androidMain/            # ONNX Runtime Android + AudioTrack playback
-    iosMain/                # Kotlin bridge to Swift TTSEngineHandler
-  tts-model-pack/           # Bundled supertonic-2 model files (Android asset pack)
-  sample/                   # Android Compose sample app
-  iosApp/                   # iOS SwiftUI sample app
+tts-supertonic-2/
+  library/          KMP library — shared API, engine, and platform implementations
+    commonMain/       Shared TTS API, config, callbacks, text preprocessing
+    androidMain/      ONNX Runtime Android inference + AudioTrack playback
+    iosMain/          ONNX Runtime iOS inference via Kotlin/Native cinterop
+  sample/           Compose Multiplatform sample app (shared UI)
+    commonMain/       Shared Compose UI
+    androidMain/      Android entry point
+    iosMain/          iOS entry point (MainViewController)
+  tts-model-pack/   Android asset module for bundled model files
+  iosApp/           iOS app shell (Xcode project via xcodegen)
 ```
 
-## Quick Start — Android
+## Prerequisites
 
-### Prerequisites
-- Android Studio Hedgehog (2023.1.1) or newer
-- JDK 17
-- Android SDK 35
+- JDK 21
+- Android Studio (for Android builds)
+- Xcode 16+ with command-line tools (for iOS builds)
+- [xcodegen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
+- [CocoaPods](https://cocoapods.org/) (for building the library's ONNX Runtime cinterop bindings — **not** needed by consumers)
 
-### Model Setup
+## Model Setup
 
-The supertonic-2 model files are bundled as an Android asset pack in `tts-model-pack/`.
-The ONNX files in the repo may be Git LFS pointers. To get the real model files:
+The supertonic-2 model files (~255 MB) are not checked into git. Download them before building:
 
 ```bash
-cd tts-model-pack/src/main/assets/tts_models/Supertone_supertonic-2/
-# Replace LFS pointers with actual model files from your local copy:
-cp ~/Downloads/supertonic-2/onnx/*.onnx .
-cp ~/Downloads/supertonic-2/onnx/*.json .
-cp ~/Downloads/supertonic-2/voice_styles/*.json .
+./download_model.sh
 ```
 
-### Steps
+This fetches the ONNX models and voice style files from [HuggingFace](https://huggingface.co/Supertone/supertonic-2) and places them in both the iOS and Android directories. The model is licensed under [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE).
+
+After downloading, you should have:
+
+```
+iosApp/Supertone_supertonic-2/
+  ├── duration_predictor.onnx    (1.5 MB)
+  ├── text_encoder.onnx          (27 MB)
+  ├── vector_estimator.onnx      (127 MB)
+  ├── vocoder.onnx               (97 MB)
+  ├── tts.json
+  ├── unicode_indexer.json
+  └── F1–F5.json, M1–M5.json    (voice styles)
+
+tts-model-pack/src/main/assets/tts_models/Supertone_supertonic-2/
+  └── (same files, copied for Android asset bundling)
+```
+
+## Building — Android
 
 1. Open the project root in Android Studio.
-2. Wait for Gradle sync to complete.
+2. Wait for Gradle sync to complete (uses JDK 21).
 3. Select the `sample` run configuration.
 4. Run on a device or emulator (API 26+).
 
-The sample app automatically extracts the bundled model from assets to internal storage
-on first launch (same pattern as the Kima app).
+The sample app extracts the bundled model from assets to internal storage on first launch.
 
-## Quick Start — iOS
+## Building — iOS
 
-### Prerequisites
-- Xcode 15+ with iOS 16 SDK
-- [xcodegen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
+### Option A: Command-line build
 
-### Steps
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
 
-1. Build the KMP framework:
-   ```bash
-   ./gradlew :library:linkDebugFrameworkIosSimulatorArm64
-   ```
+# Build the KMP framework
+./gradlew :sample:linkDebugFrameworkIosArm64          # device
+./gradlew :sample:linkDebugFrameworkIosSimulatorArm64  # simulator
 
-2. Generate the Xcode project:
-   ```bash
-   cd iosApp
-   ./generate-xcode-project.sh
-   ```
+# Generate the Xcode project and build
+cd iosApp
+./build-ios.sh
+```
 
-3. Add the supertonic-2 model directory to the Xcode project as a resource folder.
+### Option B: Xcode
 
-4. Select an iOS 16+ simulator and run.
+```bash
+# Generate the Xcode project
+cd iosApp
+xcodegen generate
+
+# Open in Xcode
+open TTSSample.xcodeproj
+```
+
+The Xcode project includes a pre-build script phase that invokes Gradle to compile the KMP framework, so you can just hit Run in Xcode. Make sure JDK 21 is available (the build script uses `/usr/libexec/java_home -v 21`).
+
+The model directory `iosApp/Supertone_supertonic-2/` is included as a resource folder in the Xcode project automatically.
 
 ## Library API
 
 ```kotlin
 val sdk = TtsSdk(TtsConfig(
-    modelDir = "/path/to/supertonic-2/onnx",
+    modelDir = "/path/to/Supertone_supertonic-2",
     defaultVoiceStyle = "M2",
 ))
 sdk.initialize()
@@ -87,14 +110,12 @@ sdk.setCallback(ttsCallback {
 })
 
 sdk.speak("Hello, world!")
-// sdk.speak(SpeakRequest(text = "Bonjour", voiceStyle = "F1", language = "fr"))
-// sdk.stop()
-// sdk.shutdown()
+sdk.speak(SpeakRequest(text = "Bonjour", voiceStyle = "F1", language = "fr"))
+sdk.stop()
+sdk.shutdown()
 ```
 
-### Bundled Model Loading
-
-The sample app uses the bundled model support to auto-extract models from assets:
+### Android — Bundled Model Loading
 
 ```kotlin
 // In Application.onCreate():
@@ -106,11 +127,22 @@ val sdk = TtsSdk(TtsConfig(modelDir = modelPath!!))
 sdk.initialize()
 ```
 
+## Supported Languages
+
+English, Korean, Spanish, Portuguese, French.
+
 ## Dependencies
 
 | Dependency | Artifact | Version |
 |---|---|---|
+| Kotlin | `org.jetbrains.kotlin` | 2.2.20 |
+| Compose Multiplatform | `org.jetbrains.compose` | 1.8.0 |
 | ONNX Runtime (Android) | `com.microsoft.onnxruntime:onnxruntime-android` | 1.19.2 |
-| ONNX Runtime (iOS) | SPM: `onnxruntime-swift-package-manager` | 1.19.2+ |
+| ONNX Runtime (iOS) | CocoaPods `onnxruntime-objc` | 1.19.2 |
 | Kotlin Coroutines | `org.jetbrains.kotlinx:kotlinx-coroutines-core` | 1.9.0 |
-| Compose BOM (sample) | `androidx.compose:compose-bom` | 2024.12.01 |
+
+## License
+
+Project source code: MIT
+
+Model weights: [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE) (Supertone)
