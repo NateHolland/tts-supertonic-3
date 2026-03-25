@@ -1,148 +1,172 @@
 # TTS Supertonic 2
 
-Kotlin Multiplatform on-device text-to-speech SDK powered by [Supertone supertonic-2](https://huggingface.co/Supertone/supertonic-2) and ONNX Runtime. Runs entirely on-device with no network calls at inference time.
+An on-device text-to-speech library for [Android](https://www.android.com/)
+and [iOS](https://developer.apple.com/ios/) via
+[Kotlin Multiplatform](https://kotlinlang.org/docs/multiplatform.html).
+Powered by the [Supertone supertonic-2](https://huggingface.co/Supertone/supertonic-2) model
+running locally through ONNX Runtime — no network calls at inference time.
 
-Targets: **Android** (API 26+) · **iOS** (16+)
+10 built-in voices (5 male, 5 female) with support for English, Korean, Spanish, Portuguese,
+and French.
 
-## Project Structure
+## Quick Start
 
+Add the dependency to your `build.gradle.kts`:
+
+```kotlin
+implementation("coach.kima.tts:tts-supertonic-2:1.0.0")
 ```
-tts-supertonic-2/
-  library/          KMP library — shared API, engine, and platform implementations
-    commonMain/       Shared TTS API, config, callbacks, text preprocessing
-    androidMain/      ONNX Runtime Android inference + AudioTrack playback
-    iosMain/          ONNX Runtime iOS inference via Kotlin/Native cinterop
-  sample/           Compose Multiplatform sample app (shared UI)
-    commonMain/       Shared Compose UI
-    androidMain/      Android entry point
-    iosMain/          iOS entry point (MainViewController)
-  tts-model-pack/   Android asset module for bundled model files
-  iosApp/           iOS app shell (Xcode project via xcodegen)
-```
-
-## Prerequisites
-
-- JDK 21
-- Android Studio (for Android builds)
-- Xcode 16+ with command-line tools (for iOS builds)
-- [xcodegen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
-- [CocoaPods](https://cocoapods.org/) (for building the library's ONNX Runtime cinterop bindings — **not** needed by consumers)
 
 ## Model Setup
 
-The supertonic-2 model files (~255 MB) are not checked into git. Download them before building:
+The supertonic-2 ONNX model files (~255 MB) must be bundled with your app. Download them from
+[HuggingFace](https://huggingface.co/Supertone/supertonic-2) and place them in your app's
+assets (Android) or bundle resources (iOS).
 
-```bash
-./download_model.sh
+The model is licensed under [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE).
+
+### Android
+
+Place the model files in your Android assets directory:
+
 ```
-
-This fetches the ONNX models and voice style files from [HuggingFace](https://huggingface.co/Supertone/supertonic-2) and places them in both the iOS and Android directories. The model is licensed under [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE).
-
-After downloading, you should have:
-
-```
-iosApp/Supertone_supertonic-2/
-  ├── duration_predictor.onnx    (1.5 MB)
-  ├── text_encoder.onnx          (27 MB)
-  ├── vector_estimator.onnx      (127 MB)
-  ├── vocoder.onnx               (97 MB)
+app/src/main/assets/tts_models/Supertone_supertonic-2/
+  ├── duration_predictor.onnx
+  ├── text_encoder.onnx
+  ├── vector_estimator.onnx
+  ├── vocoder.onnx
   ├── tts.json
   ├── unicode_indexer.json
-  └── F1–F5.json, M1–M5.json    (voice styles)
-
-tts-model-pack/src/main/assets/tts_models/Supertone_supertonic-2/
-  └── (same files, copied for Android asset bundling)
+  └── F1.json, F2.json, ... M5.json   (voice styles)
 ```
 
-## Building — Android
-
-1. Open the project root in Android Studio.
-2. Wait for Gradle sync to complete (uses JDK 21).
-3. Select the `sample` run configuration.
-4. Run on a device or emulator (API 26+).
-
-The sample app extracts the bundled model from assets to internal storage on first launch.
-
-## Building — iOS
-
-### Option A: Command-line build
-
-```bash
-export JAVA_HOME=$(/usr/libexec/java_home -v 21)
-
-# Build the KMP framework
-./gradlew :sample:linkDebugFrameworkIosArm64          # device
-./gradlew :sample:linkDebugFrameworkIosSimulatorArm64  # simulator
-
-# Generate the Xcode project and build
-cd iosApp
-./build-ios.sh
-```
-
-### Option B: Xcode
-
-```bash
-# Generate the Xcode project
-cd iosApp
-xcodegen generate
-
-# Open in Xcode
-open TTSSample.xcodeproj
-```
-
-The Xcode project includes a pre-build script phase that invokes Gradle to compile the KMP framework, so you can just hit Run in Xcode. Make sure JDK 21 is available (the build script uses `/usr/libexec/java_home -v 21`).
-
-The model directory `iosApp/Supertone_supertonic-2/` is included as a resource folder in the Xcode project automatically.
-
-## Library API
+Initialise the context holder in your `Application.onCreate()`:
 
 ```kotlin
-val sdk = TtsSdk(TtsConfig(
-    modelDir = "/path/to/Supertone_supertonic-2",
-    defaultVoiceStyle = "M2",
-))
-sdk.initialize()
-
-sdk.setCallback(ttsCallback {
-    onStart { id -> println("Started: $id") }
-    onDone  { id -> println("Done: $id") }
-    onError { id, err -> println("Error: $err") }
-})
-
-sdk.speak("Hello, world!")
-sdk.speak(SpeakRequest(text = "Bonjour", voiceStyle = "F1", language = "fr"))
-sdk.stop()
-sdk.shutdown()
-```
-
-### Android — Bundled Model Loading
-
-```kotlin
-// In Application.onCreate():
 AndroidContextHolder.set(this)
+```
 
-// Then at runtime:
+Then load the bundled model:
+
+```kotlin
 val modelPath = getBundledModelPath("Supertone/supertonic-2")
 val sdk = TtsSdk(TtsConfig(modelDir = modelPath!!))
 sdk.initialize()
 ```
 
+The SDK extracts model files from assets to internal storage on first launch.
+
+### iOS
+
+Add the `Supertone_supertonic-2/` directory to your Xcode project as a folder reference
+so it's included in the app bundle. Then initialise with the bundle path:
+
+```swift
+let modelDir = Bundle.main.path(forResource: "Supertone_supertonic-2", ofType: nil)!
+```
+
+## Usage
+
+### Basic speech
+
+```kotlin
+val sdk = TtsSdk(TtsConfig(
+    modelDir = modelPath,
+    defaultVoiceStyle = "M2",
+))
+sdk.initialize()
+
+sdk.speak("Hello, world!")
+```
+
+### Callbacks
+
+```kotlin
+sdk.setCallback(ttsCallback {
+    onStart { id -> println("Started: $id") }
+    onDone  { id -> println("Done: $id") }
+    onError { id, err -> println("Error: $err") }
+})
+```
+
+### Voice selection
+
+```kotlin
+// List available voices
+val voices = sdk.availableVoices.value  // F1–F5, M1–M5
+
+// Set voice by ID
+sdk.setVoiceStyle("F1")
+
+// Or by TtsVoice object
+sdk.setVoice(voices.first { it.gender == "FEMALE" })
+```
+
+### Language and options
+
+```kotlin
+sdk.speak(SpeakRequest(
+    text = "Bonjour, comment allez-vous?",
+    voiceStyle = "F3",
+    language = "fr",
+    speechRate = 1.1f,
+    volume = 0.8f,
+))
+```
+
+### Stop and clean up
+
+```kotlin
+sdk.stop()      // Cancel current speech
+sdk.shutdown()  // Release all resources
+```
+
+### Observing state
+
+```kotlin
+// In Compose
+val isSpeaking by sdk.isSpeaking.collectAsState()
+val voices by sdk.availableVoices.collectAsState()
+```
+
+## Available Voices
+
+| ID | Gender |
+|----|--------|
+| F1–F5 | Female |
+| M1–M5 | Male |
+
 ## Supported Languages
 
-English, Korean, Spanish, Portuguese, French.
+English (`en`), Korean (`ko`), Spanish (`es`), Portuguese (`pt`), French (`fr`).
 
-## Dependencies
+## Contributing
 
-| Dependency | Artifact | Version |
-|---|---|---|
-| Kotlin | `org.jetbrains.kotlin` | 2.2.20 |
-| Compose Multiplatform | `org.jetbrains.compose` | 1.8.0 |
-| ONNX Runtime (Android) | `com.microsoft.onnxruntime:onnxruntime-android` | 1.19.2 |
-| ONNX Runtime (iOS) | CocoaPods `onnxruntime-objc` | 1.19.2 |
-| Kotlin Coroutines | `org.jetbrains.kotlinx:kotlinx-coroutines-core` | 1.9.0 |
+See [CONTRIBUTING.md](CONTRIBUTING.md) for project structure, build instructions,
+and development setup.
 
 ## License
 
-Project source code: MIT
+    MIT License
 
-Model weights: [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE) (Supertone)
+    Copyright (c) 2026 Nate Holland
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+Model weights are licensed separately under [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE) by Supertone.
