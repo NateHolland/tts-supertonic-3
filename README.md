@@ -21,7 +21,7 @@ implementation("coach.kima.tts:tts-supertonic-2:1.0.0")
 
 The supertonic-2 ONNX model files (~255 MB) must be bundled with your app. Download them from
 [HuggingFace](https://huggingface.co/Supertone/supertonic-2) and place them in your app's
-assets (Android) or bundle resources (iOS).
+assets (Android) and bundle resources (iOS).
 
 The model is licensed under [OpenRAIL-M](https://huggingface.co/Supertone/supertonic-2/blob/main/LICENSE).
 
@@ -59,7 +59,7 @@ The SDK extracts model files from assets to internal storage on first launch.
 ### iOS
 
 Add the `Supertone_supertonic-2/` directory to your Xcode project as a folder reference
-so it's included in the app bundle. Then initialise with the bundle path:
+so it's included in the app bundle. Then initialize with the bundle path:
 
 ```swift
 let modelDir = Bundle.main.path(forResource: "Supertone_supertonic-2", ofType: nil)!
