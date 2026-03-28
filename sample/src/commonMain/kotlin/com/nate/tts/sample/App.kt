@@ -19,6 +19,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
@@ -67,6 +68,7 @@ fun App() {
     var selectedVoiceIndex by remember { mutableIntStateOf(0) }
     var language by remember { mutableStateOf("en") }
     var speechRate by remember { mutableFloatStateOf(1.0f) }
+    var isRecording by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         try {
@@ -242,8 +244,41 @@ fun App() {
                                 }
                             },
                             modifier = Modifier.weight(1f),
-                            enabled = inputText.isNotBlank(),
+                            enabled = inputText.isNotBlank() && !isSpeaking && !isRecording,
                         ) { Text("Speak") }
+
+                        OutlinedButton(
+                            onClick = {
+                                val voice = voices.getOrNull(selectedVoiceIndex)
+                                isRecording = true
+                                errorMessage = null
+                                statusMessage = "Saving to file..."
+                                scope.launch {
+                                    try {
+                                        val outputPath = getRecordingOutputPath()
+                                        val request = SpeakRequest(
+                                            text = inputText,
+                                            voiceStyle = voice?.id,
+                                            language = language.ifBlank { null },
+                                            speechRate = speechRate,
+                                        )
+                                        withContext(Dispatchers.Default) {
+                                            currentSdk.synthesiseToFile(request, outputPath)
+                                        }
+                                        statusMessage = "Saved! Opening player..."
+                                        openInMediaPlayer(outputPath)
+                                        statusMessage = "Saved to file"
+                                    } catch (e: Exception) {
+                                        errorMessage = "Save failed: ${e.message}"
+                                        statusMessage = "Error"
+                                    } finally {
+                                        isRecording = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                            enabled = inputText.isNotBlank() && !isSpeaking && !isRecording,
+                        ) { Text(if (isRecording) "Saving..." else "Save") }
 
                         Button(
                             onClick = { currentSdk.stop() },

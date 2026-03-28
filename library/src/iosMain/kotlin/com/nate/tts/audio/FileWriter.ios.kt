@@ -1,3 +1,5 @@
+@file:OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+
 package com.nate.tts.audio
 
 import kotlinx.cinterop.addressOf
