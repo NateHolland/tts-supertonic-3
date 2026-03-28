@@ -48,7 +48,8 @@ targets:
     preBuildScripts:
       - name: "Build Compose Multiplatform Framework"
         script: |
-          export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+          export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
+          export PATH="$JAVA_HOME/bin:/opt/homebrew/bin:$PATH"
           cd "$SRCROOT/.."
           if [ "$CONFIGURATION" = "Debug" ]; then
             BUILD_TYPE="Debug"

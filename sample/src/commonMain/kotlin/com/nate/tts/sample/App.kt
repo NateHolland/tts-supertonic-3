@@ -212,13 +212,44 @@ fun App() {
                         }
                     }
 
-                    OutlinedTextField(
-                        value = language,
-                        onValueChange = { language = it },
-                        label = { Text("Language (en, ko, es, pt, fr)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    run {
+                        val languages = listOf(
+                            "en" to "English",
+                            "ko" to "Korean",
+                            "es" to "Spanish",
+                            "pt" to "Portuguese",
+                            "fr" to "French",
+                        )
+                        var langExpanded by remember { mutableStateOf(false) }
+                        ExposedDropdownMenuBox(
+                            expanded = langExpanded,
+                            onExpandedChange = { langExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = languages.firstOrNull { it.first == language }
+                                    ?.let { "${it.second} (${it.first})" } ?: language,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Language") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(langExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            )
+                            ExposedDropdownMenu(
+                                expanded = langExpanded,
+                                onDismissRequest = { langExpanded = false }
+                            ) {
+                                languages.forEach { (code, name) ->
+                                    DropdownMenuItem(
+                                        text = { Text("$name ($code)") },
+                                        onClick = {
+                                            language = code
+                                            langExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     Column {
                         val rateText = "${(speechRate * 10).toInt() / 10.0}x"
