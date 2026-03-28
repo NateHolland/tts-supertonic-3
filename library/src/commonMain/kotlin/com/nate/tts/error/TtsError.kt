@@ -5,4 +5,5 @@ sealed class TtsError(message: String) : Exception(message) {
     class InferenceFailed(msg: String) : TtsError(msg)
     class AudioPlaybackFailed(msg: String) : TtsError(msg)
     class InvalidText(msg: String) : TtsError(msg)
+    class FileWriteFailed(msg: String) : TtsError(msg)
 }

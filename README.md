@@ -114,6 +114,27 @@ sdk.speak(SpeakRequest(
 ))
 ```
 
+### Save to file
+
+Synthesise speech directly to a WAV file without playing it:
+
+```kotlin
+val request = SpeakRequest(
+    text = "This will be saved to a file.",
+    voiceStyle = "F1",
+    language = "en",
+)
+
+// Write to a WAV file
+val sampleRate = sdk.synthesiseToFile(request, "/path/to/output.wav")
+
+// Or get the WAV bytes in memory (e.g. for uploading)
+val wavBytes: ByteArray = sdk.synthesiseToBytes(request)
+
+// Or get raw PCM float samples for custom processing
+val pcmSamples: FloatArray = sdk.synthesiseToFloatArray(request)
+```
+
 ### Stop and clean up
 
 ```kotlin

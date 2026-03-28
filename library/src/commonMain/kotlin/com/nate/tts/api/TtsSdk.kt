@@ -1,5 +1,7 @@
 package com.nate.tts.api
 
+import com.nate.tts.audio.WavEncoder
+import com.nate.tts.audio.writeBytes
 import com.nate.tts.callback.TtsCallback
 import com.nate.tts.config.ModelConfig
 import com.nate.tts.config.TtsConfig
@@ -106,6 +108,88 @@ class TtsSdk(private val config: TtsConfig) {
             }
         }
     }
+
+    /**
+     * Synthesise text and write the result to a WAV file.
+     *
+     * This is a suspend function that runs inference on the current coroutine context,
+     * writes the WAV file, and returns the output file path.
+     *
+     * @param request The speak request (text, voice, language, etc.)
+     * @param outputPath Absolute path for the output WAV file
+     * @return The sample rate of the output audio
+     * @throws TtsError if inference or file writing fails
+     */
+    suspend fun synthesiseToFile(request: SpeakRequest, outputPath: String): Int {
+        val eng = engine ?: throw TtsError.ModelNotLoaded()
+        val mc = modelConfig ?: throw TtsError.ModelNotLoaded()
+
+        val voiceStyle = request.voiceStyle ?: currentVoiceStyle
+        val language = request.language ?: "en"
+
+        val cleanText = TextPreprocessor.preprocess(request.text)
+            ?: throw TtsError.InvalidText("Text is empty after preprocessing")
+
+        val pcm = eng.synthesise(cleanText, voiceStyle, language)
+        val wavBytes = WavEncoder.encode(pcm, mc.sampleRate)
+
+        try {
+            writeBytes(outputPath, wavBytes)
+        } catch (e: Exception) {
+            throw TtsError.FileWriteFailed("Failed to write WAV to $outputPath: ${e.message}")
+        }
+
+        return mc.sampleRate
+    }
+
+    /**
+     * Synthesise text and return the raw WAV file bytes.
+     *
+     * Useful when you need the audio data without writing to disk,
+     * e.g. for streaming, uploading, or in-memory processing.
+     *
+     * @param request The speak request (text, voice, language, etc.)
+     * @return WAV file contents as a byte array
+     * @throws TtsError if inference fails
+     */
+    suspend fun synthesiseToBytes(request: SpeakRequest): ByteArray {
+        val eng = engine ?: throw TtsError.ModelNotLoaded()
+        val mc = modelConfig ?: throw TtsError.ModelNotLoaded()
+
+        val voiceStyle = request.voiceStyle ?: currentVoiceStyle
+        val language = request.language ?: "en"
+
+        val cleanText = TextPreprocessor.preprocess(request.text)
+            ?: throw TtsError.InvalidText("Text is empty after preprocessing")
+
+        val pcm = eng.synthesise(cleanText, voiceStyle, language)
+        return WavEncoder.encode(pcm, mc.sampleRate)
+    }
+
+    /**
+     * Synthesise text and return the raw PCM float samples.
+     *
+     * The returned samples are normalised in the range [-1.0, 1.0] at the model's
+     * native sample rate (available via [modelConfig]).
+     *
+     * @param request The speak request (text, voice, language, etc.)
+     * @return PCM float samples
+     * @throws TtsError if inference fails
+     */
+    suspend fun synthesiseToFloatArray(request: SpeakRequest): FloatArray {
+        val eng = engine ?: throw TtsError.ModelNotLoaded()
+
+        val voiceStyle = request.voiceStyle ?: currentVoiceStyle
+        val language = request.language ?: "en"
+
+        val cleanText = TextPreprocessor.preprocess(request.text)
+            ?: throw TtsError.InvalidText("Text is empty after preprocessing")
+
+        return eng.synthesise(cleanText, voiceStyle, language)
+    }
+
+    /** The sample rate of the loaded model, or null if not initialised. */
+    val sampleRate: Int? get() = modelConfig?.sampleRate
 
     fun stop() {
         cancelCurrentJob()
