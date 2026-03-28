@@ -14,7 +14,7 @@ and French.
 Add the dependency to your `build.gradle.kts`:
 
 ```kotlin
-implementation("coach.kima.tts:tts-supertonic-2:1.0.0")
+implementation("coach.kima.tts:tts-supertonic-2:1.1.0")
 ```
 
 ## Model Setup

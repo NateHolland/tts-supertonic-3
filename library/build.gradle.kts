@@ -24,7 +24,7 @@ kotlin {
         summary = "TTS Supertonic 2 — on-device text-to-speech SDK"
         homepage = "https://tangled.org/nateholland.bsky.social/TTS-Supertonic-2"
         ios.deploymentTarget = "16.0"
-        version = "1.0.0"
+        version = "1.1.0"
 
         framework {
             baseName = "TtsSupertonic2"
