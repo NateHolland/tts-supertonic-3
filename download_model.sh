@@ -15,22 +15,26 @@ BASE_URL="https://huggingface.co/${REPO}/resolve/main"
 IOS_DIR="iosApp/Supertone_supertonic-2"
 ANDROID_DIR="tts-model-pack/src/main/assets/tts_models/Supertone_supertonic-2"
 
-# All files to download
-ONNX_FILES=(
-  "duration_predictor.onnx"
-  "text_encoder.onnx"
-  "vector_estimator.onnx"
-  "vocoder.onnx"
+# Files to download — remote paths relative to repo root
+# Format: "remote_path:local_filename"
+DOWNLOADS=(
+  "onnx/duration_predictor.onnx:duration_predictor.onnx"
+  "onnx/text_encoder.onnx:text_encoder.onnx"
+  "onnx/vector_estimator.onnx:vector_estimator.onnx"
+  "onnx/vocoder.onnx:vocoder.onnx"
+  "onnx/tts.json:tts.json"
+  "onnx/unicode_indexer.json:unicode_indexer.json"
+  "voice_styles/F1.json:F1.json"
+  "voice_styles/F2.json:F2.json"
+  "voice_styles/F3.json:F3.json"
+  "voice_styles/F4.json:F4.json"
+  "voice_styles/F5.json:F5.json"
+  "voice_styles/M1.json:M1.json"
+  "voice_styles/M2.json:M2.json"
+  "voice_styles/M3.json:M3.json"
+  "voice_styles/M4.json:M4.json"
+  "voice_styles/M5.json:M5.json"
 )
-
-JSON_FILES=(
-  "tts.json"
-  "unicode_indexer.json"
-  "F1.json" "F2.json" "F3.json" "F4.json" "F5.json"
-  "M1.json" "M2.json" "M3.json" "M4.json" "M5.json"
-)
-
-ALL_FILES=("${ONNX_FILES[@]}" "${JSON_FILES[@]}")
 
 echo "=== Supertone supertonic-2 Model Downloader ==="
 echo "License: OpenRAIL-M"
@@ -40,26 +44,29 @@ echo ""
 mkdir -p "$IOS_DIR" "$ANDROID_DIR"
 
 # Download to iOS dir first, then copy to Android
-for file in "${ALL_FILES[@]}"; do
-  dest="$IOS_DIR/$file"
+for entry in "${DOWNLOADS[@]}"; do
+  remote="${entry%%:*}"
+  local_name="${entry##*:}"
+  dest="$IOS_DIR/$local_name"
   if [ -f "$dest" ]; then
-    echo "  [skip] $file (already exists)"
+    echo "  [skip] $local_name (already exists)"
     continue
   fi
-  echo "  [download] $file ..."
-  curl -fSL "${BASE_URL}/${file}" -o "$dest"
+  echo "  [download] $local_name ..."
+  curl -fSL "${BASE_URL}/${remote}" -o "$dest"
 done
 
 echo ""
 echo "=== Copying to Android directory ==="
-for file in "${ALL_FILES[@]}"; do
-  src="$IOS_DIR/$file"
-  dest="$ANDROID_DIR/$file"
+for entry in "${DOWNLOADS[@]}"; do
+  local_name="${entry##*:}"
+  src="$IOS_DIR/$local_name"
+  dest="$ANDROID_DIR/$local_name"
   if [ -f "$dest" ] && cmp -s "$src" "$dest"; then
-    echo "  [skip] $file (already up to date)"
+    echo "  [skip] $local_name (already up to date)"
   else
     cp "$src" "$dest"
-    echo "  [copy] $file"
+    echo "  [copy] $local_name"
   fi
 done
 

@@ -53,6 +53,12 @@ private const val MODEL_ID = "Supertone/supertonic-2"
 /** Platform-specific initialization (e.g. Android context setup). */
 expect fun platformInit()
 
+/** Returns a writable file path for saving synthesised audio. */
+expect fun getRecordingOutputPath(): String
+
+/** Opens the given audio file in the platform's media player. */
+expect fun openInMediaPlayer(path: String)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun App() {
