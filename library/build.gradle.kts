@@ -1,3 +1,4 @@
+val sdkVersion = "1.1.0"
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)
@@ -24,7 +25,7 @@ kotlin {
         summary = "TTS Supertonic 2 — on-device text-to-speech SDK"
         homepage = "https://tangled.org/nateholland.bsky.social/TTS-Supertonic-2"
         ios.deploymentTarget = "16.0"
-        version = "1.1.0"
+        version = sdkVersion
 
         framework {
             baseName = "TtsSupertonic2"
@@ -71,7 +72,7 @@ mavenPublishing {
     publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
 
-    coordinates("coach.kima.tts", "tts-supertonic-2", "1.0.0")
+    coordinates("coach.kima.tts", "tts-supertonic-2", sdkVersion)
 
     pom {
         name.set("TTS Supertonic 2")
