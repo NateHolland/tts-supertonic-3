@@ -330,6 +330,11 @@ fun App() {
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+
+                    RoundTripPanel(
+                        tts = currentSdk,
+                        voiceStyle = voices.getOrNull(selectedVoiceIndex)?.id,
+                    )
                 }
             }
         }
