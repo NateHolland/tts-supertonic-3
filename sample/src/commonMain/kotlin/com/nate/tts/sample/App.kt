@@ -56,7 +56,7 @@ expect fun platformInit()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun App() {
+fun App(autoRun: String? = null) {
     val scope = rememberCoroutineScope()
 
     var sdk by remember { mutableStateOf<TtsSdk?>(null) }
@@ -104,6 +104,22 @@ fun App() {
         } catch (e: Exception) {
             loadError = "Failed to load model: ${e.message}"
             isLoading = false
+        }
+    }
+
+    // Headless driver: launch with `-e roundtrip sequential|rapid|both` to run the rig once
+    // the model is ready and log results to logcat (grep "KimaRig|"). No taps needed.
+    LaunchedEffect(sdk, autoRun) {
+        val ready = sdk ?: return@LaunchedEffect
+        val mode = autoRun ?: return@LaunchedEffect
+        val rig = RoundTripRig(ready)
+        when (mode.lowercase()) {
+            "sequential" -> rig.runSequential(ROUND_TRIP_PHRASES, voiceStyle = null)
+            "rapid" -> rig.runRapid(ROUND_TRIP_PHRASES, voiceStyle = null)
+            "both" -> {
+                rig.runSequential(ROUND_TRIP_PHRASES, voiceStyle = null)
+                rig.runRapid(ROUND_TRIP_PHRASES, voiceStyle = null)
+            }
         }
     }
 

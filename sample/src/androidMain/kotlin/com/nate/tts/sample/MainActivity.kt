@@ -21,8 +21,9 @@ class MainActivity : ComponentActivity() {
         ) {
             requestMic.launch(Manifest.permission.RECORD_AUDIO)
         }
+        val autoRun = intent?.getStringExtra("roundtrip")
         setContent {
-            App()
+            App(autoRun = autoRun)
         }
     }
 }

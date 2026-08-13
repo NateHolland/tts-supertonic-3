@@ -75,12 +75,13 @@ class RoundTripRig(
                     timedOut = heard == null,
                 )
                 results += res
+                logResult("sequential", res)
                 onResult(res)
             }
         } finally {
             stt.shutdown()
         }
-        return summarize(results)
+        return summarize(results).also { logSummary("sequential", it) }
     }
 
     /**
@@ -125,9 +126,9 @@ class RoundTripRig(
                 wordErrorRate = wer,
                 matched = wer <= matchThreshold,
                 timedOut = best == null,
-            ).also(onResult)
+            ).also { logResult("rapid", it); onResult(it) }
         }
-        return summarize(results)
+        return summarize(results).also { logSummary("rapid", it) }
     }
 
     /** Speak one phrase and return the first utterance STT hears, or null on timeout. */
@@ -151,6 +152,20 @@ class RoundTripRig(
         tts.stop()
         return heard
     }
+
+    // Logged to stdout → Android logcat (tag "System.out"); grep for "KimaRig|" to read a
+    // headless run's results without the on-screen UI.
+    private fun logResult(mode: String, r: RoundTripResult) {
+        println("KimaRig| [$mode] #${r.index} matched=${r.matched} wer=${pctInt(r.wordErrorRate)} " +
+            "sent=\"${r.sent}\" heard=\"${r.heard}\"")
+    }
+
+    private fun logSummary(mode: String, s: RoundTripSummary) {
+        println("KimaRig| SUMMARY [$mode] matched=${s.matched}/${s.total} " +
+            "matchRate=${pctInt(s.matchRate)} meanWer=${pctInt(s.meanWer)}")
+    }
+
+    private fun pctInt(x: Double): String = "${(x * 100 + 0.5).toInt()}%"
 
     private fun summarize(results: List<RoundTripResult>): RoundTripSummary {
         if (results.isEmpty()) return RoundTripSummary(results, 0.0, 0.0)
