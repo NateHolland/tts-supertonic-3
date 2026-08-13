@@ -131,6 +131,68 @@ class RoundTripRig(
         return summarize(results).also { logSummary("rapid", it) }
     }
 
+    /**
+     * The realistic garble scenario: a cue arrives while a previous one is still being spoken.
+     * For each phrase, start a long filler cue, let it get into playback, then interrupt with
+     * the target phrase — and check the target is heard cleanly. Under the garble bug the
+     * interrupting cue overlaps the filler and comes out corrupted; once playback is serialized
+     * it cleanly supersedes. STT is reset right at the interrupt so it scores the target.
+     */
+    suspend fun runCollision(
+        phrases: List<String>,
+        voiceStyle: String?,
+        filler: String = "okay here is something to keep in mind while you keep shooting the ball",
+        interruptAfterMs: Long = 2200,
+        perPhraseTimeoutMs: Long = 12_000,
+        onResult: (RoundTripResult) -> Unit = {},
+    ): RoundTripSummary {
+        val stt = SttSdk(SttConfig(continuous = false, partialResults = false, preferOnDevice = false))
+        val results = mutableListOf<RoundTripResult>()
+        try {
+            for ((i, phrase) in phrases.withIndex()) {
+                val heard = captureCollision(stt, filler, phrase, voiceStyle, interruptAfterMs, perPhraseTimeoutMs)
+                val wer = wordErrorRate(phrase, heard ?: "")
+                val res = RoundTripResult(
+                    index = i, sent = phrase, heard = heard ?: "",
+                    wordErrorRate = wer, matched = heard != null && wer <= matchThreshold,
+                    timedOut = heard == null,
+                )
+                results += res
+                logResult("collision", res)
+                onResult(res)
+            }
+        } finally {
+            stt.shutdown()
+        }
+        return summarize(results).also { logSummary("collision", it) }
+    }
+
+    private suspend fun captureCollision(
+        stt: SttSdk,
+        filler: String,
+        target: String,
+        voiceStyle: String?,
+        interruptAfterMs: Long,
+        timeoutMs: Long,
+    ): String? {
+        stt.stop()
+        tts.speak(SpeakRequest(text = filler, voiceStyle = voiceStyle))
+        delay(interruptAfterMs) // let the filler get into playback
+        // Reset STT so it hears the interrupting target, not the filler that preceded it.
+        val done = CompletableDeferred<String?>()
+        stt.setCallback(sttCallback {
+            onUtterance { text -> done.complete(text) }
+            onError { _ -> done.complete(null) }
+        })
+        stt.start()
+        delay(150)
+        tts.speak(SpeakRequest(text = target, voiceStyle = voiceStyle)) // interrupt mid-filler
+        val heard = withTimeoutOrNull(timeoutMs) { done.await() }
+        stt.stop()
+        tts.stop()
+        return heard
+    }
+
     /** Speak one phrase and return the first utterance STT hears, or null on timeout. */
     private suspend fun captureOne(
         stt: SttSdk,

@@ -118,6 +118,7 @@ fun App(autoRun: String? = null, modelDirOverride: String? = null) {
         when (mode.lowercase()) {
             "sequential" -> rig.runSequential(ROUND_TRIP_PHRASES, voiceStyle = null)
             "rapid" -> rig.runRapid(ROUND_TRIP_PHRASES, voiceStyle = null)
+            "collision" -> rig.runCollision(ROUND_TRIP_PHRASES, voiceStyle = null)
             "both" -> {
                 rig.runSequential(ROUND_TRIP_PHRASES, voiceStyle = null)
                 rig.runRapid(ROUND_TRIP_PHRASES, voiceStyle = null)
