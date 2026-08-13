@@ -22,8 +22,9 @@ class MainActivity : ComponentActivity() {
             requestMic.launch(Manifest.permission.RECORD_AUDIO)
         }
         val autoRun = intent?.getStringExtra("roundtrip")
+        val modelDir = intent?.getStringExtra("model_dir")
         setContent {
-            App(autoRun = autoRun)
+            App(autoRun = autoRun, modelDirOverride = modelDir)
         }
     }
 }

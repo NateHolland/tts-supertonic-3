@@ -3,7 +3,6 @@ package com.nate.tts.stt
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -57,19 +56,21 @@ internal class AndroidSttEngine : SttEngine {
                 listener.onError(SttError.Unavailable())
                 return@runOnMain
             }
-            // Tear down any previous session first (re-arm path).
-            recognizer?.destroy()
-
-            val onDevice = preferOnDevice &&
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                SpeechRecognizer.isOnDeviceRecognitionAvailable(ctx)
-            val rec = if (onDevice) {
-                SpeechRecognizer.createOnDeviceSpeechRecognizer(ctx)
-            } else {
-                SpeechRecognizer.createSpeechRecognizer(ctx)
+            // Reuse ONE recognizer across turns. Destroying + recreating it on every start
+            // churns the bound recognition service, which then rejects the next start with
+            // ERROR_SERVER_DISCONNECTED / ERROR_RECOGNIZER_BUSY (it killed ~half the turns).
+            // Instead keep the instance and just cancel() it back to idle before re-arming.
+            //
+            // Use the DEFAULT recognizer, not createOnDeviceSpeechRecognizer: the on-device
+            // path hard-fails with ERROR_LANGUAGE_UNAVAILABLE when the language pack isn't
+            // downloaded, whereas the default recognizer uses on-device when it's present and
+            // falls back to Google's online recognizer otherwise. [preferOnDevice] is passed
+            // through as the EXTRA_PREFER_OFFLINE hint below rather than a hard requirement.
+            val rec = recognizer ?: SpeechRecognizer.createSpeechRecognizer(ctx).also {
+                it.setRecognitionListener(recognitionListener)
+                recognizer = it
             }
-            rec.setRecognitionListener(recognitionListener)
-            recognizer = rec
+            runCatching { rec.cancel() }
 
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -80,9 +81,11 @@ internal class AndroidSttEngine : SttEngine {
                 if (preferOnDevice) putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             }
             listening = true
+            println("KimaStt| startListening locale=$locale partial=$partialResults preferOffline=$preferOnDevice")
             runCatching { rec.startListening(intent) }
                 .onFailure {
                     listening = false
+                    println("KimaStt| startListening threw: ${it.message}")
                     listener.onError(SttError.AudioFailed(it.message ?: "startListening failed"))
                 }
         }
@@ -91,23 +94,29 @@ internal class AndroidSttEngine : SttEngine {
     override fun stop() {
         runOnMain {
             listening = false
+            // cancel() (not destroy) returns the recognizer to idle while keeping the service
+            // bound, so the next start() re-arms cleanly.
+            recognizer?.let { runCatching { it.cancel() } }
+        }
+    }
+
+    override fun release() {
+        runOnMain {
+            listening = false
             recognizer?.let {
-                // stopListening() finalizes any buffered audio; destroy() frees the service.
-                runCatching { it.stopListening() }
+                runCatching { it.cancel() }
                 runCatching { it.destroy() }
             }
             recognizer = null
         }
     }
 
-    override fun release() = stop()
-
     private val recognitionListener = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {}
-        override fun onBeginningOfSpeech() {}
+        override fun onReadyForSpeech(params: Bundle?) { println("KimaStt| onReadyForSpeech") }
+        override fun onBeginningOfSpeech() { println("KimaStt| onBeginningOfSpeech") }
         override fun onRmsChanged(rmsdB: Float) {}
         override fun onBufferReceived(buffer: ByteArray?) {}
-        override fun onEndOfSpeech() {}
+        override fun onEndOfSpeech() { println("KimaStt| onEndOfSpeech") }
 
         override fun onPartialResults(partialResults: Bundle?) {
             firstResult(partialResults)?.let { listener?.onPartial(it) }
@@ -115,11 +124,14 @@ internal class AndroidSttEngine : SttEngine {
 
         override fun onResults(results: Bundle?) {
             listening = false
-            listener?.onFinal(firstResult(results).orEmpty())
+            val text = firstResult(results).orEmpty()
+            println("KimaStt| onResults '$text'")
+            listener?.onFinal(text)
         }
 
         override fun onError(error: Int) {
             listening = false
+            println("KimaStt| onError code=$error")
             listener?.onError(mapError(error))
         }
 
@@ -134,10 +146,14 @@ internal class AndroidSttEngine : SttEngine {
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> SttError.NoMatch()
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> SttError.PermissionDenied()
         SpeechRecognizer.ERROR_AUDIO -> SttError.AudioFailed("Audio recording error")
+        // Transient: the recognizer wasn't ready or the service briefly dropped while
+        // re-arming. ERROR_SERVER_DISCONNECTED is 11; referenced by literal since the constant
+        // isn't present on all API levels.
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+        11 -> SttError.Busy("Recognizer busy/disconnected ($code)")
         SpeechRecognizer.ERROR_NETWORK,
         SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
         SpeechRecognizer.ERROR_SERVER,
-        SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
         SpeechRecognizer.ERROR_CLIENT -> SttError.RecognitionFailed("Recognizer error $code")
         else -> SttError.RecognitionFailed("Recognizer error $code")
     }

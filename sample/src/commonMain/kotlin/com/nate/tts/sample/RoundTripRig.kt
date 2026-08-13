@@ -60,7 +60,7 @@ class RoundTripRig(
         perPhraseTimeoutMs: Long = 12_000,
         onResult: (RoundTripResult) -> Unit = {},
     ): RoundTripSummary {
-        val stt = SttSdk(SttConfig(continuous = false, partialResults = false))
+        val stt = SttSdk(SttConfig(continuous = false, partialResults = false, preferOnDevice = false))
         val results = mutableListOf<RoundTripResult>()
         try {
             for ((i, phrase) in phrases.withIndex()) {
@@ -97,7 +97,7 @@ class RoundTripRig(
         drainMs: Long = 8_000,
         onResult: (RoundTripResult) -> Unit = {},
     ): RoundTripSummary {
-        val stt = SttSdk(SttConfig(continuous = true, partialResults = false))
+        val stt = SttSdk(SttConfig(continuous = true, partialResults = false, preferOnDevice = false))
         val heard = mutableListOf<String>()
         try {
             stt.setCallback(sttCallback { onUtterance { heard += it } })

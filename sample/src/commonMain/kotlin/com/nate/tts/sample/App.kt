@@ -56,7 +56,7 @@ expect fun platformInit()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun App(autoRun: String? = null) {
+fun App(autoRun: String? = null, modelDirOverride: String? = null) {
     val scope = rememberCoroutineScope()
 
     var sdk by remember { mutableStateOf<TtsSdk?>(null) }
@@ -73,8 +73,10 @@ fun App(autoRun: String? = null) {
 
     LaunchedEffect(Unit) {
         try {
+            // A `-e model_dir <abs path>` launch extra points straight at an already-present
+            // model dir (e.g. one copied from the Kima app), skipping asset extraction.
             statusMessage = "Extracting model from assets..."
-            val modelPath = withContext(Dispatchers.Default) {
+            val modelPath = modelDirOverride ?: withContext(Dispatchers.Default) {
                 getBundledModelPath(MODEL_ID)
             }
 

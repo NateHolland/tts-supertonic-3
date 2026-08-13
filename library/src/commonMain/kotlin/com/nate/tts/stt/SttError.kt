@@ -11,6 +11,12 @@ sealed class SttError(message: String) : Exception(message) {
     /** The recognizer finished a turn with no intelligible speech (silence / noise). */
     class NoMatch(msg: String = "No speech recognized") : SttError(msg)
 
+    /**
+     * A transient not-ready condition (recognizer busy, or the recognition service briefly
+     * disconnected while re-arming). Retryable — continuous listening re-arms through these.
+     */
+    class Busy(msg: String = "Recognizer temporarily unavailable") : SttError(msg)
+
     /** Microphone capture failed (device busy, audio session, etc.). */
     class AudioFailed(msg: String) : SttError(msg)
 

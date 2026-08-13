@@ -40,6 +40,10 @@ class SttSdk(private val config: SttConfig = SttConfig()) {
     /** True while the caller wants the continuous loop to keep running (survives re-arms). */
     private var active = false
 
+    /** Consecutive transient re-arms with no successful recognition; bounds a broken-service loop. */
+    private var transientRetries = 0
+    private val maxTransientRetries = 30
+
     private val _status = MutableStateFlow(SttStatus.IDLE)
     val status: StateFlow<SttStatus> = _status.asStateFlow()
 
@@ -63,6 +67,7 @@ class SttSdk(private val config: SttConfig = SttConfig()) {
 
     private val listener = object : SttEngineListener {
         override fun onPartial(text: String) {
+            transientRetries = 0
             _partialText.value = text
             callback?.onPartial(text)
         }
@@ -71,6 +76,7 @@ class SttSdk(private val config: SttConfig = SttConfig()) {
             _partialText.value = ""
             val turn = text.trim()
             if (turn.isNotEmpty()) {
+                transientRetries = 0
                 callback?.onUtterance(turn)
                 _utterances.tryEmit(turn)
             }
@@ -80,9 +86,13 @@ class SttSdk(private val config: SttConfig = SttConfig()) {
 
         override fun onError(error: SttError) {
             _partialText.value = ""
-            // A no-match just means the player paused — in a continuous conversation that's
-            // expected, so resume listening instead of surfacing it as a failure.
-            if (active && config.continuous && error is SttError.NoMatch) {
+            // NoMatch (the player paused) and Busy (recognizer not ready / service briefly
+            // dropped while re-arming) are expected during a continuous conversation — resume
+            // listening rather than surfacing them, up to a bound that stops a broken-service
+            // loop from spinning forever.
+            val transient = error is SttError.NoMatch || error is SttError.Busy
+            if (active && config.continuous && transient && transientRetries < maxTransientRetries) {
+                transientRetries++
                 reArm()
                 return
             }
