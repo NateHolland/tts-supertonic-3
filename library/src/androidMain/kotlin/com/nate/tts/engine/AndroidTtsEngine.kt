@@ -48,7 +48,14 @@ class AndroidTtsEngine : TtsEngine {
     private var textEncoderSession: OrtSession? = null
     private var vectorEstimatorSession: OrtSession? = null
     private var vocoderSession: OrtSession? = null
+
+    // All access to [audioTrack] + [playbackLatch] is guarded by [trackLock] so a new
+    // utterance's stopAudio() can't race the previous utterance's playback teardown (a source
+    // of overlapping/garbled output). [playbackLatch] lets stopAudio() promptly wake a
+    // playAudio() that's blocked waiting for the clip to finish.
+    private val trackLock = Any()
     private var audioTrack: AudioTrack? = null
+    private var playbackLatch: CountDownLatch? = null
 
     private var modelConfig: ModelConfig? = null
     private var modelDir: String? = null
@@ -380,6 +387,8 @@ class AndroidTtsEngine : TtsEngine {
     override fun playAudio(pcmData: FloatArray, sampleRate: Int, volume: Float) {
         stopAudio()
 
+        val latch = CountDownLatch(1)
+        var track: AudioTrack? = null
         try {
             Log.i(TAG, "Playing ${pcmData.size} samples (${pcmData.size / sampleRate.toFloat()}s)")
 
@@ -392,7 +401,7 @@ class AndroidTtsEngine : TtsEngine {
                 sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
             )
 
-            val track = AudioTrack.Builder()
+            val t = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -409,38 +418,56 @@ class AndroidTtsEngine : TtsEngine {
                 .setBufferSizeInBytes(maxOf(bufferSize, minBuf))
                 .setTransferMode(AudioTrack.MODE_STATIC)
                 .build()
+            track = t
 
-            track.write(pcm16, 0, pcm16.size)
-            track.setVolume(volume)
-            audioTrack = track
-            isPlaying = true
-
-            track.notificationMarkerPosition = pcm16.size
-            val latch = CountDownLatch(1)
-            track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
-                override fun onMarkerReached(t: AudioTrack?) { latch.countDown() }
-                override fun onPeriodicNotification(t: AudioTrack?) {}
+            t.write(pcm16, 0, pcm16.size)
+            t.setVolume(volume)
+            t.notificationMarkerPosition = pcm16.size
+            t.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+                override fun onMarkerReached(x: AudioTrack?) { latch.countDown() }
+                override fun onPeriodicNotification(x: AudioTrack?) {}
             })
 
-            track.play()
+            // Publish as the current track BEFORE play() so a concurrent stopAudio() can find
+            // and stop it (and wake this latch) rather than leaving an orphan playing.
+            synchronized(trackLock) {
+                audioTrack = t
+                playbackLatch = latch
+                isPlaying = true
+            }
+
+            t.play()
             val durationMs = (pcm16.size.toLong() * 1000L) / sampleRate
+            // Returns when the clip finishes OR stopAudio() counts the latch down early.
             latch.await(durationMs + 500, TimeUnit.MILLISECONDS)
-            isPlaying = false
         } catch (e: Exception) {
-            isPlaying = false
             throw TtsError.AudioPlaybackFailed("Playback failed: ${e.message}")
+        } finally {
+            synchronized(trackLock) {
+                if (playbackLatch === latch) playbackLatch = null
+                // Only tear down / clear state if stopAudio() hasn't already replaced us.
+                if (audioTrack === track && track != null) {
+                    runCatching { if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop() }
+                    runCatching { track.release() }
+                    audioTrack = null
+                    isPlaying = false
+                }
+            }
         }
     }
 
     override fun stopAudio() {
-        try {
+        synchronized(trackLock) {
+            // Wake any playAudio() blocked on the clip so its coroutine can unwind promptly.
+            playbackLatch?.countDown()
+            playbackLatch = null
             audioTrack?.let {
-                if (it.playState == AudioTrack.PLAYSTATE_PLAYING) it.stop()
-                it.release()
+                runCatching { if (it.playState == AudioTrack.PLAYSTATE_PLAYING) it.stop() }
+                runCatching { it.release() }
             }
-        } catch (_: Exception) {}
-        audioTrack = null
-        isPlaying = false
+            audioTrack = null
+            isPlaying = false
+        }
     }
 
     override fun release() {
