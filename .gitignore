@@ -36,3 +36,6 @@ library/build/
 
 # Git LFS (not supported by host)
 .gitattributes
+
+# local TTS garble rig + playback site (not part of the library)
+tools/

@@ -108,6 +108,9 @@ class TtsSdk(private val config: TtsConfig) {
                         return@withLock
                     }
 
+                    // Warm the audio output BEFORE synthesising, so the warm-up runs during the
+                    // (otherwise silent) ~1s synthesis window and the first word isn't clipped.
+                    eng.prepareStream(mc.sampleRate)
                     val pcm = eng.synthesise(cleanText, voiceStyle, language)
                     ensureActive() // superseded during synthesis → don't play a stale clip
                     eng.playAudio(pcm, mc.sampleRate, request.volume)

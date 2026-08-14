@@ -1,6 +1,6 @@
 Pod::Spec.new do |spec|
     spec.name                     = 'library'
-    spec.version                  = '1.1.0'
+    spec.version                  = '1.2.2'
     spec.homepage                 = 'https://tangled.org/nateholland.bsky.social/TTS-Supertonic-2'
     spec.source                   = { :http=> ''}
     spec.authors                  = ''
