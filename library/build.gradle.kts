@@ -23,7 +23,7 @@ kotlin {
     // are statically linked into the output framework.
     cocoapods {
         summary = "TTS Supertonic 3 — on-device text-to-speech SDK"
-        homepage = "https://tangled.org/nateholland.bsky.social/TTS-Supertonic-3"
+        homepage = "https://github.com/NateHolland/tts-supertonic-3"
         ios.deploymentTarget = "16.0"
         version = sdkVersion
 
@@ -77,7 +77,7 @@ mavenPublishing {
     pom {
         name.set("TTS Supertonic 3")
         description.set("Kotlin Multiplatform on-device text-to-speech SDK using ONNX Runtime with the Supertone supertonic-3 model.")
-        url.set("https://tangled.org/nateholland.bsky.social/TTS-Supertonic-3")
+        url.set("https://github.com/NateHolland/tts-supertonic-3")
         inceptionYear.set("2026")
 
         licenses {
@@ -98,9 +98,9 @@ mavenPublishing {
         }
 
         scm {
-            url.set("https://tangled.org/nateholland.bsky.social/TTS-Supertonic-3")
-            connection.set("scm:git:git://tangled.org/nateholland.bsky.social/TTS-Supertonic-3.git")
-            developerConnection.set("scm:git:ssh://tangled.org/nateholland.bsky.social/TTS-Supertonic-3.git")
+            url.set("https://github.com/NateHolland/tts-supertonic-3")
+            connection.set("scm:git:https://github.com/NateHolland/tts-supertonic-3.git")
+            developerConnection.set("scm:git:ssh://git@github.com/NateHolland/tts-supertonic-3.git")
         }
     }
 }
