@@ -71,9 +71,9 @@ After setup you should have model files in both locations:
 
 ```
 iosApp/Supertone_supertonic-3/
-  ├── duration_predictor.onnx    (1.5 MB)
-  ├── text_encoder.onnx          (27 MB)
-  ├── vector_estimator.onnx      (127 MB)
+  ├── duration_predictor.onnx    (3.5 MB)
+  ├── text_encoder.onnx          (35 MB)
+  ├── vector_estimator.onnx      (245 MB)
   ├── vocoder.onnx               (97 MB)
   ├── tts.json
   ├── unicode_indexer.json
