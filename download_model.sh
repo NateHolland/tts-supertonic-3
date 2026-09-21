@@ -1,19 +1,19 @@
 #!/bin/bash
 #
-# Downloads the Supertone supertonic-2 TTS model from HuggingFace
+# Downloads the Supertone supertonic-3 TTS model from HuggingFace
 # and places files in the correct directories for Android and iOS builds.
 #
-# License: OpenRAIL-M (see https://huggingface.co/Supertone/supertonic-2)
+# License: OpenRAIL-M (see https://huggingface.co/Supertone/supertonic-3)
 #
 # Usage: ./download_model.sh
 
 set -euo pipefail
 
-REPO="Supertone/supertonic-2"
+REPO="Supertone/supertonic-3"
 BASE_URL="https://huggingface.co/${REPO}/resolve/main"
 
-IOS_DIR="iosApp/Supertone_supertonic-2"
-ANDROID_DIR="tts-model-pack/src/main/assets/tts_models/Supertone_supertonic-2"
+IOS_DIR="iosApp/Supertone_supertonic-3"
+ANDROID_DIR="tts-model-pack/src/main/assets/tts_models/Supertone_supertonic-3"
 
 # Files to download — remote paths relative to repo root
 # Format: "remote_path:local_filename"
@@ -36,7 +36,7 @@ DOWNLOADS=(
   "voice_styles/M5.json:M5.json"
 )
 
-echo "=== Supertone supertonic-2 Model Downloader ==="
+echo "=== Supertone supertonic-3 Model Downloader ==="
 echo "License: OpenRAIL-M"
 echo ""
 

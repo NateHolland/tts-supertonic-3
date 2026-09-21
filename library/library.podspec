@@ -1,20 +1,20 @@
 Pod::Spec.new do |spec|
     spec.name                     = 'library'
-    spec.version                  = '1.1.0'
-    spec.homepage                 = 'https://tangled.org/nateholland.bsky.social/TTS-Supertonic-2'
+    spec.version                  = '2.0.0'
+    spec.homepage                 = 'https://tangled.org/nateholland.bsky.social/TTS-Supertonic-3'
     spec.source                   = { :http=> ''}
     spec.authors                  = ''
     spec.license                  = ''
-    spec.summary                  = 'TTS Supertonic 2 — on-device text-to-speech SDK'
-    spec.vendored_frameworks      = 'build/cocoapods/framework/TtsSupertonic2.framework'
+    spec.summary                  = 'TTS Supertonic 3 — on-device text-to-speech SDK'
+    spec.vendored_frameworks      = 'build/cocoapods/framework/TtsSupertonic3.framework'
     spec.libraries                = 'c++'
     spec.ios.deployment_target    = '16.0'
     spec.dependency 'onnxruntime-objc', '~> 1.19.2'
                 
-    if !Dir.exist?('build/cocoapods/framework/TtsSupertonic2.framework') || Dir.empty?('build/cocoapods/framework/TtsSupertonic2.framework')
+    if !Dir.exist?('build/cocoapods/framework/TtsSupertonic3.framework') || Dir.empty?('build/cocoapods/framework/TtsSupertonic3.framework')
         raise "
 
-        Kotlin framework 'TtsSupertonic2' doesn't exist yet, so a proper Xcode project can't be generated.
+        Kotlin framework 'TtsSupertonic3' doesn't exist yet, so a proper Xcode project can't be generated.
         'pod install' should be executed after running ':generateDummyFramework' Gradle task:
 
             ./gradlew :library:generateDummyFramework
@@ -28,7 +28,7 @@ Pod::Spec.new do |spec|
                 
     spec.pod_target_xcconfig = {
         'KOTLIN_PROJECT_PATH' => ':library',
-        'PRODUCT_MODULE_NAME' => 'TtsSupertonic2',
+        'PRODUCT_MODULE_NAME' => 'TtsSupertonic3',
     }
                 
     spec.script_phases = [

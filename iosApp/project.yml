@@ -23,7 +23,7 @@ targets:
     sources:
       - path: TTSSample
         type: group
-      - path: Supertone_supertonic-2
+      - path: Supertone_supertonic-3
         type: folder
         buildPhase: resources
     settings:

@@ -8,6 +8,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
 import com.nate.tts.config.ModelConfig
+import com.nate.tts.config.SupportedLanguages
 import com.nate.tts.error.TtsError
 import com.nate.tts.model.TtsVoice
 import org.json.JSONArray
@@ -32,7 +33,7 @@ private const val TAG = "AndroidTtsEngine"
 /**
  * Android implementation of [TtsEngine] using ONNX Runtime and AudioTrack.
  *
- * Loads the supertonic-2 multi-model pipeline:
+ * Loads the supertonic-3 multi-model pipeline:
  * - duration_predictor.onnx — text + style → scalar duration (seconds)
  * - text_encoder.onnx       — text + style → text embeddings
  * - vector_estimator.onnx   — iterative flow-matching denoiser (N steps)
@@ -165,7 +166,7 @@ class AndroidTtsEngine : TtsEngine {
             val config = ModelConfig(
                 sampleRate = sampleRate,
                 voices = voices,
-                supportedLanguages = listOf("en", "ko", "es", "pt", "fr"),
+                supportedLanguages = SupportedLanguages.codes,
             )
             modelConfig = config
             Log.i(TAG, "Model loaded. ${voices.size} voices: ${voices.map { it.id }}")
@@ -196,15 +197,11 @@ class AndroidTtsEngine : TtsEngine {
         val tensorsToClose = mutableListOf<OnnxTensor>()
 
         try {
-            // ── 1. Preprocess text with language tags ──
-            // Critical: the model expects text wrapped like "<en>Hello world.</en>"
-            val lang = language.ifBlank { "en" }
-            var processedText = text.trim()
-            // Add trailing punctuation if missing (matching official preprocessor)
-            if (!processedText.matches(Regex(".*[.!?;:,'\"')\\]}…]$"))) {
-                processedText += "."
+            // ── 1. Wrap in the language tag the model expects: "<en>Hello world.</en>" ──
+            if (!SupportedLanguages.isSupported(language.ifBlank { SupportedLanguages.DEFAULT })) {
+                Log.w(TAG, "Unsupported language '$language', falling back to ${SupportedLanguages.DEFAULT}")
             }
-            processedText = "<$lang>$processedText</$lang>"
+            val processedText = TextPreprocessor.tagForModel(text, language)
             Log.d(TAG, "Processed text: '$processedText'")
 
             // ── 2. Tokenise ──
@@ -483,16 +480,24 @@ class AndroidTtsEngine : TtsEngine {
     }
 
     /**
-     * Tokenise text using unicode_indexer.
-     * Matches official: `[indexer[ord(c)] for c in text]`
+     * Tokenise text using unicode_indexer. Matches the official reference
+     * (`[indexer[ord(c)] for c in text]`) except that codepoints the indexer
+     * marks unsupported ([UNSUPPORTED_TOKEN]) are dropped rather than passed
+     * through — a negative id would be read by the embedding Gather as an
+     * index from the end of the table, silently substituting an unrelated
+     * character. Text should already be NFKD-normalised by [TextPreprocessor].
      */
     private fun tokeniseText(text: String, indexer: IntArray): IntArray {
         // Use codePoints to handle multi-byte chars correctly
         val codePoints = text.codePoints().toArray()
-        return IntArray(codePoints.size) { i ->
-            val cp = codePoints[i]
-            if (cp < indexer.size) indexer[cp] else 0
+        val tokens = ArrayList<Int>(codePoints.size)
+        var dropped = 0
+        for (cp in codePoints) {
+            val token = if (cp < indexer.size) indexer[cp] else UNSUPPORTED_TOKEN
+            if (token == UNSUPPORTED_TOKEN) dropped++ else tokens.add(token)
         }
+        if (dropped > 0) Log.w(TAG, "Dropped $dropped unsupported character(s)")
+        return tokens.toIntArray()
     }
 
     /** Extract flat FloatArray from OnnxTensor via its raw FloatBuffer. */

@@ -18,7 +18,7 @@ local.properties
 gradle.properties
 
 # Model files (downloaded via ./download_model.sh)
-iosApp/Supertone_supertonic-2/
+iosApp/Supertone_supertonic-3/
 tts-model-pack/src/main/assets/tts_models/
 
 # Audio test files

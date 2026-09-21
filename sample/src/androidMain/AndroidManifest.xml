@@ -4,7 +4,7 @@
     <application
         android:name=".SampleApplication"
         android:allowBackup="false"
-        android:label="TTS Supertonic 2"
+        android:label="TTS Supertonic 3"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity

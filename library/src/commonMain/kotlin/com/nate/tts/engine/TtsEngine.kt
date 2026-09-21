@@ -10,3 +10,9 @@ interface TtsEngine {
     fun release()
     val isPlaying: Boolean
 }
+
+/**
+ * Value `unicode_indexer.json` stores for a codepoint outside the model's
+ * character vocabulary. It is not a usable token id — see the tokenisers.
+ */
+internal const val UNSUPPORTED_TOKEN = -1

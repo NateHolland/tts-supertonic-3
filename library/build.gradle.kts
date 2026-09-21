@@ -1,4 +1,4 @@
-val sdkVersion = "1.1.0"
+val sdkVersion = "2.0.0"
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)
@@ -22,13 +22,13 @@ kotlin {
     // Consumers of this SDK do NOT need CocoaPods — the ONNX Runtime symbols
     // are statically linked into the output framework.
     cocoapods {
-        summary = "TTS Supertonic 2 — on-device text-to-speech SDK"
-        homepage = "https://tangled.org/nateholland.bsky.social/TTS-Supertonic-2"
+        summary = "TTS Supertonic 3 — on-device text-to-speech SDK"
+        homepage = "https://tangled.org/nateholland.bsky.social/TTS-Supertonic-3"
         ios.deploymentTarget = "16.0"
         version = sdkVersion
 
         framework {
-            baseName = "TtsSupertonic2"
+            baseName = "TtsSupertonic3"
             isStatic = true
         }
 
@@ -72,12 +72,12 @@ mavenPublishing {
     publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
 
-    coordinates("coach.kima.tts", "tts-supertonic-2", sdkVersion)
+    coordinates("coach.kima.tts", "tts-supertonic-3", sdkVersion)
 
     pom {
-        name.set("TTS Supertonic 2")
-        description.set("Kotlin Multiplatform on-device text-to-speech SDK using ONNX Runtime with the Supertone supertonic-2 model.")
-        url.set("https://tangled.org/nateholland.bsky.social/TTS-Supertonic-2")
+        name.set("TTS Supertonic 3")
+        description.set("Kotlin Multiplatform on-device text-to-speech SDK using ONNX Runtime with the Supertone supertonic-3 model.")
+        url.set("https://tangled.org/nateholland.bsky.social/TTS-Supertonic-3")
         inceptionYear.set("2026")
 
         licenses {
@@ -98,9 +98,9 @@ mavenPublishing {
         }
 
         scm {
-            url.set("https://tangled.org/nateholland.bsky.social/TTS-Supertonic-2")
-            connection.set("scm:git:git://tangled.org/nateholland.bsky.social/TTS-Supertonic-2.git")
-            developerConnection.set("scm:git:ssh://tangled.org/nateholland.bsky.social/TTS-Supertonic-2.git")
+            url.set("https://tangled.org/nateholland.bsky.social/TTS-Supertonic-3")
+            connection.set("scm:git:git://tangled.org/nateholland.bsky.social/TTS-Supertonic-3.git")
+            developerConnection.set("scm:git:ssh://tangled.org/nateholland.bsky.social/TTS-Supertonic-3.git")
         }
     }
 }

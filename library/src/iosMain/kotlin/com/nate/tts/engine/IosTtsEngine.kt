@@ -2,6 +2,7 @@ package com.nate.tts.engine
 
 import cocoapods.onnxruntime_objc.*
 import com.nate.tts.config.ModelConfig
+import com.nate.tts.config.SupportedLanguages
 import com.nate.tts.error.TtsError
 import com.nate.tts.model.TtsVoice
 import kotlinx.cinterop.*
@@ -14,7 +15,7 @@ import kotlin.random.Random
 /**
  * iOS implementation of [TtsEngine] using ONNX Runtime Obj-C API via cinterop.
  *
- * Loads the supertonic-2 multi-model pipeline and runs inference entirely in Kotlin.
+ * Loads the supertonic-3 multi-model pipeline and runs inference entirely in Kotlin.
  */
 @OptIn(ExperimentalForeignApi::class)
 class IosTtsEngine : TtsEngine {
@@ -136,7 +137,7 @@ class IosTtsEngine : TtsEngine {
         }
 
         println("[TTS] Model loaded. ${voices.size} voices")
-        return ModelConfig(sampleRate = sampleRate, voices = voices, supportedLanguages = listOf("en", "ko", "es", "pt", "fr"))
+        return ModelConfig(sampleRate = sampleRate, voices = voices, supportedLanguages = SupportedLanguages.codes)
     }
 
     override fun synthesise(text: String, voiceStyleId: String, language: String): FloatArray {
@@ -151,13 +152,11 @@ class IosTtsEngine : TtsEngine {
             ?: throw TtsError.InferenceFailed("No DP voice style for '$voiceStyleId'")
 
         try {
-            // 1. Preprocess text with language tags
-            val lang = language.ifBlank { "en" }
-            var processedText = text.trim()
-            if (!processedText.matches(Regex(".*[.!?;:,'\"')\\]}…]$"))) {
-                processedText += "."
+            // 1. Wrap in the language tag the model expects: "<en>Hello world.</en>"
+            if (!SupportedLanguages.isSupported(language.ifBlank { SupportedLanguages.DEFAULT })) {
+                println("[TTS] Unsupported language '$language', falling back to ${SupportedLanguages.DEFAULT}")
             }
-            processedText = "<$lang>$processedText</$lang>"
+            val processedText = TextPreprocessor.tagForModel(text, language)
             println("[TTS] Processed text: '$processedText'")
 
             // 2. Tokenise
@@ -409,16 +408,23 @@ class IosTtsEngine : TtsEngine {
         value.toString().toFloatOrNull()?.let { out.add(it) }
     }
 
+    /**
+     * Tokenise text using unicode_indexer. Matches the official reference
+     * (`[indexer[ord(c)] for c in text]`) except that codepoints the indexer
+     * marks unsupported ([UNSUPPORTED_TOKEN]) are dropped rather than passed
+     * through — a negative id would be read by the embedding Gather as an
+     * index from the end of the table, silently substituting an unrelated
+     * character. Text should already be NFKD-normalised by [TextPreprocessor].
+     */
     private fun tokeniseText(text: String): IntArray {
         val tokens = mutableListOf<Int>()
+        var dropped = 0
         for (char in text) {
             val cp = char.code
-            if (cp < unicodeIndexer.size) {
-                tokens.add(unicodeIndexer[cp])
-            } else {
-                tokens.add(0)
-            }
+            val token = if (cp < unicodeIndexer.size) unicodeIndexer[cp] else UNSUPPORTED_TOKEN
+            if (token == UNSUPPORTED_TOKEN) dropped++ else tokens.add(token)
         }
+        if (dropped > 0) println("[TTS] Dropped $dropped unsupported character(s)")
         return tokens.toIntArray()
     }
 

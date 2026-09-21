@@ -22,9 +22,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Main entry point for the TTS Supertonic 2 SDK.
+ * Main entry point for the TTS Supertonic 3 SDK.
  *
- * Loads a supertonic-2 ONNX model from a directory, runs on-device inference,
+ * Loads a supertonic-3 ONNX model from a directory, runs on-device inference,
  * and plays audio through the platform audio system.
  */
 class TtsSdk(private val config: TtsConfig) {

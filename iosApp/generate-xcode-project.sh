@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Generates the Xcode project for the TTS Supertonic 2 iOS sample app.
+# Generates the Xcode project for the TTS Supertonic 3 iOS sample app.
 #
 # Prerequisites:
 #   - Xcode 16+ with command-line tools

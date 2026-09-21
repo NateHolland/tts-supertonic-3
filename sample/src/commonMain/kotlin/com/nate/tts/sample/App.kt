@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.nate.tts.api.TtsSdk
 import com.nate.tts.callback.ttsCallback
+import com.nate.tts.config.SupportedLanguages
 import com.nate.tts.config.TtsConfig
 import com.nate.tts.engine.getBundledModelPath
 import com.nate.tts.model.SpeakRequest
@@ -48,7 +50,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val MODEL_ID = "Supertone/supertonic-2"
+private const val MODEL_ID = "Supertone/supertonic-3"
 
 /** Platform-specific initialization (e.g. Android context setup). */
 expect fun platformInit()
@@ -79,7 +81,7 @@ fun App() {
             }
 
             if (modelPath == null) {
-                loadError = "Bundled model not found. Ensure supertonic-2 model files are included."
+                loadError = "Bundled model not found. Ensure supertonic-3 model files are included."
                 isLoading = false
                 return@LaunchedEffect
             }
@@ -109,7 +111,7 @@ fun App() {
 
     MaterialTheme {
         Scaffold(
-            topBar = { TopAppBar(title = { Text("TTS Supertonic 2") }) }
+            topBar = { TopAppBar(title = { Text("TTS Supertonic 3") }) }
         ) { padding ->
             Column(
                 modifier = Modifier
@@ -156,7 +158,7 @@ fun App() {
 
                     Card(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text("Model: supertonic-2", style = MaterialTheme.typography.titleSmall)
+                            Text("Model: supertonic-3", style = MaterialTheme.typography.titleSmall)
                             Text("Engine: ONNX Runtime", style = MaterialTheme.typography.bodySmall)
                             Text("Voices: ${voices.size}", style = MaterialTheme.typography.bodySmall)
                             Text(
@@ -208,21 +210,15 @@ fun App() {
                     }
 
                     run {
-                        val languages = listOf(
-                            "en" to "English",
-                            "ko" to "Korean",
-                            "es" to "Spanish",
-                            "pt" to "Portuguese",
-                            "fr" to "French",
-                        )
+                        val languages = SupportedLanguages.all
                         var langExpanded by remember { mutableStateOf(false) }
                         ExposedDropdownMenuBox(
                             expanded = langExpanded,
                             onExpandedChange = { langExpanded = it }
                         ) {
                             OutlinedTextField(
-                                value = languages.firstOrNull { it.first == language }
-                                    ?.let { "${it.second} (${it.first})" } ?: language,
+                                value = languages.firstOrNull { it.code == language }
+                                    ?.let { "${it.name} (${it.code})" } ?: language,
                                 onValueChange = {},
                                 readOnly = true,
                                 label = { Text("Language") },
@@ -231,7 +227,8 @@ fun App() {
                             )
                             ExposedDropdownMenu(
                                 expanded = langExpanded,
-                                onDismissRequest = { langExpanded = false }
+                                onDismissRequest = { langExpanded = false },
+                                modifier = Modifier.heightIn(max = 320.dp),
                             ) {
                                 languages.forEach { (code, name) ->
                                     DropdownMenuItem(

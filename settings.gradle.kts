@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "tts-supertonic-2"
+rootProject.name = "tts-supertonic-3"
 
 include(":library")
 include(":sample")
