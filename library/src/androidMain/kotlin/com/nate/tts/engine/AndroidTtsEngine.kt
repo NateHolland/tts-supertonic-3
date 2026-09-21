@@ -19,8 +19,6 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.ln
@@ -49,7 +47,30 @@ class AndroidTtsEngine : TtsEngine {
     private var textEncoderSession: OrtSession? = null
     private var vectorEstimatorSession: OrtSession? = null
     private var vocoderSession: OrtSession? = null
-    private var audioTrack: AudioTrack? = null
+
+    // Playback design — a SINGLE persistent MODE_STREAM track for the engine's whole life.
+    //
+    // Earlier designs created a fresh AudioTrack per cue (MODE_STATIC). On some devices
+    // (e.g. Samsung SM-S928B) the per-cue create → play → stop → release cycle intermittently
+    // corrupts a chunk of the clip: the start/stop transient of a short track drops or garbles
+    // either the onset ("Nice bucket" -> "bucket") or the tail ("Nice bucket" -> "Nice buck"),
+    // ~15-40% of clips at random. No buffer sizing or silence lead-in fixes it, because the
+    // glitch is the track lifecycle itself, not the buffer contents.
+    //
+    // Instead, ONE stream track is created once and never torn down between cues. A feeder
+    // thread writes it continuously with blocking writes: 20 ms of silence when idle (which
+    // keeps the output hot and the buffer from underrunning) and the clip PCM when a cue is
+    // submitted. No per-cue track start/stop → no transient → no garble. [framesWritten] tracks
+    // total frames handed to the track so playAudio can block until the clip has drained.
+    private val trackLock = Any()
+    private val clipLock = Object()
+    private var streamTrack: AudioTrack? = null
+    private var streamThread: Thread? = null
+    private var streamRate: Int = 0
+    @Volatile private var streamRunning: Boolean = false
+    @Volatile private var pendingClip: ShortArray? = null
+    @Volatile private var framesWritten: Long = 0L
+    @Volatile private var clipEndFrame: Long = -1L
 
     private var modelConfig: ModelConfig? = null
     private var modelDir: String? = null
@@ -66,6 +87,14 @@ class AndroidTtsEngine : TtsEngine {
     private var baseChunkSize: Int = 512
     private var chunkCompressFactor: Int = 6
     private var latentDim: Int = 24
+
+    /**
+     * How many candidates to render per utterance; the best (see [selectBestCandidate]) is kept.
+     * Flow matching from random noise garbles a word on ~15-20% of draws; rendering a few and
+     * keeping the most-complete one removes it. 1 disables best-of-N (single render). The
+     * candidates render concurrently, so N>1 costs far less than N× a single render.
+     */
+    var synthBestOfN: Int = 3
 
     /** latentDim * chunkCompressFactor — the actual channel dimension for latent tensors */
     private val latentDimVal: Int get() = latentDim * chunkCompressFactor
@@ -106,8 +135,14 @@ class AndroidTtsEngine : TtsEngine {
 
         try {
             val env = OrtEnvironment.getEnvironment()
+            // Use more cores per inference — the models were only getting 2 threads on an 8-core
+            // SoC, leaving most of the CPU idle and inflating synth latency (which best-of-N
+            // multiplies). Cap so we favour the big cores and don't thrash the little ones.
+            val cores = Runtime.getRuntime().availableProcessors()
+            val intraOp = cores.coerceIn(2, 6)
+            Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores)")
             val opts = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(2)
+                setIntraOpNumThreads(intraOp)
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             }
 
@@ -268,84 +303,89 @@ class AndroidTtsEngine : TtsEngine {
             val latentLen = ((wavLenMax + chunkSize - 1) / chunkSize).toInt()
             Log.i(TAG, "wavLen=$wavLength latentLen=$latentLen latentDimVal=$latentDimVal")
 
-            // Generate random Gaussian noise [1, latentDimVal, latentLen]
+            // Latent mask: [1, 1, latentLen] — 1.0 within the (deterministic) duration, else 0.
             val noiseSize = latentDimVal * latentLen
-            val noise = randomGaussian(noiseSize)
-
-            // Compute latent mask: [1, 1, latentLen]
-            // For single-sample case, all positions within the duration are 1.0
             val latentLength = ((wavLength + chunkSize - 1) / chunkSize).toInt()
-            val latentMaskData = FloatArray(latentLen) { i ->
-                if (i < latentLength) 1.0f else 0.0f
-            }
-
-            // Apply mask to noise: zero out positions beyond the actual duration
-            for (d in 0 until latentDimVal) {
-                for (t in 0 until latentLen) {
-                    noise[d * latentLen + t] *= latentMaskData[t]
-                }
-            }
-
+            val latentMaskData = FloatArray(latentLen) { i -> if (i < latentLength) 1.0f else 0.0f }
             val latentMaskTensor = OnnxTensor.createTensor(
                 env, FloatBuffer.wrap(latentMaskData),
                 longArrayOf(1, 1, latentLen.toLong())
             ).also { tensorsToClose.add(it) }
 
-            // ── Step 4: Iterative denoising with vector estimator ──
             val totalSteps = 5
-            var xt = noise  // mutable — replaced each iteration
-            Log.d(TAG, "Step 4: VE denoising ($totalSteps steps)...")
+            val trimLength = min((sampleRate * duration).toInt(), Int.MAX_VALUE)
 
-            for (step in 0 until totalSteps) {
-                val xtTensor = OnnxTensor.createTensor(
-                    env, FloatBuffer.wrap(xt),
-                    longArrayOf(1, latentDimVal.toLong(), latentLen.toLong())
+            // ── Steps 4+5: best-of-N flow matching + vocoding ──
+            // Flow matching from a random latent under-converges into a garbled word on ~15-20%
+            // of noise draws. The coaching text is LLM-generated (unbounded), so we can't audit a
+            // fixed cue list. Instead render N candidates from DIFFERENT seeds (the shared, noise-
+            // free text encoding + duration are computed once above) and keep the MEDOID — the one
+            // most acoustically similar to the others. Clean renders of the same text agree; a
+            // garbled render is an idiosyncratic outlier, so the majority self-consistency wins
+            // without any external recognizer. A text-derived base seed keeps the whole thing
+            // reproducible for debugging.
+            val baseSeed = (text + "|" + voiceStyleId).hashCode().toLong()
+
+            // Render one candidate (noise → N VE steps → vocoder → trimmed audio). Pure w.r.t.
+            // the shared read-only tensors, so candidates can run concurrently. A single render
+            // only saturates ~2 threads, so running N at once fills the intra-op pool and makes
+            // best-of-N cost close to a single render instead of N×.
+            fun render(c: Int): FloatArray {
+                var xt = randomGaussian(noiseSize, baseSeed + c * 7919L)
+                for (d in 0 until latentDimVal) {
+                    val base = d * latentLen
+                    for (t in 0 until latentLen) xt[base + t] *= latentMaskData[t]
+                }
+                for (step in 0 until totalSteps) {
+                    val xtTensor = OnnxTensor.createTensor(
+                        env, FloatBuffer.wrap(xt), longArrayOf(1, latentDimVal.toLong(), latentLen.toLong())
+                    )
+                    val currentStepTensor = OnnxTensor.createTensor(
+                        env, FloatBuffer.wrap(floatArrayOf(step.toFloat())), longArrayOf(1)
+                    )
+                    val totalStepTensor = OnnxTensor.createTensor(
+                        env, FloatBuffer.wrap(floatArrayOf(totalSteps.toFloat())), longArrayOf(1)
+                    )
+                    val veResult = veSession.run(mapOf(
+                        "noisy_latent" to xtTensor,
+                        "text_emb" to textEmbTensor,
+                        "style_ttl" to ttlStyleTensor,
+                        "text_mask" to textMaskTensor,
+                        "latent_mask" to latentMaskTensor,
+                        "current_step" to currentStepTensor,
+                        "total_step" to totalStepTensor,
+                    ))
+                    xt = extractFloats(veResult.get(veSession.outputNames.first()).get() as OnnxTensor)
+                    veResult.close(); xtTensor.close(); currentStepTensor.close(); totalStepTensor.close()
+                }
+                val latentTensor = OnnxTensor.createTensor(
+                    env, FloatBuffer.wrap(xt), longArrayOf(1, latentDimVal.toLong(), latentLen.toLong())
                 )
-                val currentStepTensor = OnnxTensor.createTensor(
-                    env, FloatBuffer.wrap(floatArrayOf(step.toFloat())),
-                    longArrayOf(1)
-                )
-                val totalStepTensor = OnnxTensor.createTensor(
-                    env, FloatBuffer.wrap(floatArrayOf(totalSteps.toFloat())),
-                    longArrayOf(1)
-                )
+                val vocResult = vocSession.run(mapOf("latent" to latentTensor))
+                val full = extractFloats(vocResult.get(vocSession.outputNames.first()).get() as OnnxTensor)
+                vocResult.close(); latentTensor.close()
+                return full.copyOfRange(0, min(full.size, trimLength))
+            }
 
-                val veResult = veSession.run(mapOf(
-                    "noisy_latent" to xtTensor,
-                    "text_emb" to textEmbTensor,
-                    "style_ttl" to ttlStyleTensor,
-                    "text_mask" to textMaskTensor,
-                    "latent_mask" to latentMaskTensor,
-                    "current_step" to currentStepTensor,
-                    "total_step" to totalStepTensor,
-                ))
-
-                xt = extractFloats(veResult.get(veSession.outputNames.first()).get() as OnnxTensor)
-                veResult.close()
-                xtTensor.close()
-                currentStepTensor.close()
-                totalStepTensor.close()
-
-                Log.d(TAG, "VE step $step: size=${xt.size} min=${xt.min()} max=${xt.max()}")
+            val candidates: List<FloatArray>
+            if (synthBestOfN <= 1) {
+                candidates = listOf(render(0))
+            } else {
+                val out = arrayOfNulls<FloatArray>(synthBestOfN)
+                val errors = arrayOfNulls<Throwable>(synthBestOfN)
+                val threads = (0 until synthBestOfN).map { c ->
+                    Thread { try { out[c] = render(c) } catch (t: Throwable) { errors[c] = t } }
+                        .apply { name = "tts-cand-$c"; start() }
+                }
+                threads.forEach { it.join() }
+                errors.firstOrNull { it != null }?.let { throw it }
+                candidates = out.map { it!! }
             }
 
             // Done with text encoder output
             teResult.close()
 
-            // ── Step 5: Vocoder ──
-            Log.d(TAG, "Step 5: Vocoder...")
-            val latentTensor = OnnxTensor.createTensor(
-                env, FloatBuffer.wrap(xt),
-                longArrayOf(1, latentDimVal.toLong(), latentLen.toLong())
-            )
-            val vocResult = vocSession.run(mapOf("latent" to latentTensor))
-            val fullAudio = extractFloats(vocResult.get(vocSession.outputNames.first()).get() as OnnxTensor)
-            vocResult.close()
-            latentTensor.close()
-
-            // Trim audio to actual duration
-            val trimLength = min(fullAudio.size, (sampleRate * duration).toInt())
-            val audio = fullAudio.copyOfRange(0, trimLength)
+            val audio = if (candidates.size <= 1) candidates[0] else candidates[selectBestCandidate(candidates)]
 
             Log.i(TAG, "Synthesis done: ${audio.size} samples (${audio.size / sampleRate.toFloat()}s) " +
                 "min=${audio.min()} max=${audio.max()}")
@@ -374,74 +414,161 @@ class AndroidTtsEngine : TtsEngine {
 
     // ── Playback ──────────────────────────────────────────────────────────
 
+    /**
+     * Bring up the single persistent stream track and its feeder thread (idempotent while the
+     * sample rate is unchanged). Holds [trackLock]. The feeder writes 20 ms silence chunks when
+     * idle and clip PCM (via [pendingClip]) when a cue is submitted, all with blocking writes so
+     * the track's buffer never underruns.
+     */
+    private fun ensureStreamLocked(sampleRate: Int) {
+        if (streamTrack != null && streamRate == sampleRate && streamRunning) return
+        stopStreamLocked()
+
+        // Small buffer keeps the clip close to the head of the queue (low added latency) while
+        // continuous blocking feeding keeps it from underrunning.
+        val minBuf = AudioTrack.getMinBufferSize(
+            sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
+        ).coerceAtLeast(2048)
+        val t = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .build()
+            )
+            .setBufferSizeInBytes(minBuf)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        streamTrack = t
+        streamRate = sampleRate
+        streamRunning = true
+        framesWritten = 0L
+        clipEndFrame = -1L
+        pendingClip = null
+        t.play()
+
+        val silence = ShortArray(sampleRate * 20 / 1000) // 20 ms keep-alive chunk
+        val th = Thread {
+            try {
+                while (streamRunning) {
+                    val clip = pendingClip
+                    if (clip != null) {
+                        pendingClip = null
+                        var off = 0
+                        while (off < clip.size && streamRunning) {
+                            val w = t.write(clip, off, clip.size - off, AudioTrack.WRITE_BLOCKING)
+                            if (w <= 0) break
+                            off += w
+                            framesWritten += w
+                        }
+                        synchronized(clipLock) {
+                            clipEndFrame = framesWritten
+                            clipLock.notifyAll()
+                        }
+                    } else {
+                        val w = t.write(silence, 0, silence.size, AudioTrack.WRITE_BLOCKING)
+                        if (w > 0) framesWritten += w else if (w < 0) break
+                    }
+                }
+            } catch (_: Throwable) { /* released — exit */ }
+        }.apply { isDaemon = true; name = "tts-stream" }
+        streamThread = th
+        th.start()
+    }
+
+    private fun stopStreamLocked() {
+        streamRunning = false
+        streamThread?.let { runCatching { it.interrupt() } }
+        streamThread = null
+        streamTrack?.let {
+            runCatching { it.pause() }
+            runCatching { it.flush() }
+            runCatching { it.release() }
+        }
+        streamTrack = null
+        streamRate = 0
+        pendingClip = null
+        clipEndFrame = -1L
+        framesWritten = 0L
+        synchronized(clipLock) { clipLock.notifyAll() }
+    }
+
+    /** Called before synthesis: bring up the stream so the output is hot when the cue plays. */
+    override fun prepareStream(sampleRate: Int) {
+        synchronized(trackLock) { ensureStreamLocked(sampleRate) }
+    }
+
     override fun playAudio(pcmData: FloatArray, sampleRate: Int, volume: Float) {
-        stopAudio()
+        Log.i(TAG, "Playing ${pcmData.size} samples (${pcmData.size / sampleRate.toFloat()}s)")
+
+        val pcm16 = ShortArray(pcmData.size) { i ->
+            (pcmData[i].coerceIn(-1.0f, 1.0f) * Short.MAX_VALUE).toInt().toShort()
+        }
+
+        val track: AudioTrack
+        synchronized(trackLock) {
+            ensureStreamLocked(sampleRate)
+            track = streamTrack ?: throw TtsError.AudioPlaybackFailed("No stream track")
+            runCatching { track.setVolume(volume) }
+            isPlaying = true
+            // Hand the clip to the feeder. It writes it right after the silence already buffered.
+            clipEndFrame = -1L
+            pendingClip = pcm16
+        }
 
         try {
-            Log.i(TAG, "Playing ${pcmData.size} samples (${pcmData.size / sampleRate.toFloat()}s)")
-
-            val pcm16 = ShortArray(pcmData.size) { i ->
-                (pcmData[i].coerceIn(-1.0f, 1.0f) * Short.MAX_VALUE).toInt().toShort()
+            // Wait for the feeder to accept + write the whole clip (sets clipEndFrame).
+            val acceptDeadline = System.currentTimeMillis() + 3000
+            synchronized(clipLock) {
+                while (clipEndFrame < 0 && streamRunning) {
+                    val remain = acceptDeadline - System.currentTimeMillis()
+                    if (remain <= 0) break
+                    clipLock.wait(remain)
+                }
             }
-
-            val bufferSize = pcm16.size * 2
-            val minBuf = AudioTrack.getMinBufferSize(
-                sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT
-            )
-
-            val track = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .build()
-                )
-                .setBufferSizeInBytes(maxOf(bufferSize, minBuf))
-                .setTransferMode(AudioTrack.MODE_STATIC)
-                .build()
-
-            track.write(pcm16, 0, pcm16.size)
-            track.setVolume(volume)
-            audioTrack = track
-            isPlaying = true
-
-            track.notificationMarkerPosition = pcm16.size
-            val latch = CountDownLatch(1)
-            track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
-                override fun onMarkerReached(t: AudioTrack?) { latch.countDown() }
-                override fun onPeriodicNotification(t: AudioTrack?) {}
-            })
-
-            track.play()
-            val durationMs = (pcm16.size.toLong() * 1000L) / sampleRate
-            latch.await(durationMs + 500, TimeUnit.MILLISECONDS)
-            isPlaying = false
+            val endFrame = clipEndFrame
+            if (endFrame >= 0) {
+                // Block until the clip has physically drained (playback head reaches its end).
+                val durationMs = (pcm16.size.toLong() * 1000L) / sampleRate
+                val drainDeadline = System.currentTimeMillis() + durationMs + 1000
+                while (streamRunning && System.currentTimeMillis() < drainDeadline) {
+                    val head = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                    if (head >= endFrame) break
+                    Thread.sleep(10)
+                }
+            }
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
         } catch (e: Exception) {
-            isPlaying = false
             throw TtsError.AudioPlaybackFailed("Playback failed: ${e.message}")
+        } finally {
+            synchronized(trackLock) { isPlaying = false }
         }
     }
 
     override fun stopAudio() {
-        try {
-            audioTrack?.let {
-                if (it.playState == AudioTrack.PLAYSTATE_PLAYING) it.stop()
-                it.release()
-            }
-        } catch (_: Exception) {}
-        audioTrack = null
-        isPlaying = false
+        // Soft barge-in: just drop the queued clip so the next cue supersedes it. The stream
+        // track is NEVER paused/flushed/restarted here — that would add a per-cue start transient
+        // (the very thing this design removes). Any already-buffered audio (≤ one small buffer)
+        // simply drains as the feeder resumes silence.
+        pendingClip = null
+        synchronized(trackLock) { isPlaying = false }
+        synchronized(clipLock) { clipLock.notifyAll() }
     }
 
     override fun release() {
-        stopAudio()
+        synchronized(trackLock) {
+            isPlaying = false
+            stopStreamLocked() // stopAudio keeps the stream warm; release tears it down
+        }
         listOf(durationPredictorSession, textEncoderSession, vectorEstimatorSession, vocoderSession)
             .forEach { runCatching { it?.close() } }
         durationPredictorSession = null
@@ -508,9 +635,146 @@ class AndroidTtsEngine : TtsEngine {
         return arr
     }
 
+    /**
+     * Pick the medoid of N candidate waveforms — the one whose log-magnitude spectrogram is
+     * closest (summed L2 over frames × bands) to all the others. Clean renders of the same text
+     * are acoustically similar; a garbled render is an outlier, so the medoid is a clean render
+     * as long as a majority are clean. No external recognizer needed.
+     */
+    private val specBands = 24
+
+    /**
+     * Choose the best of N candidate renders. The dominant garble mode is a DROPPED word
+     * ("Good work" -> "Work"), and the duration predictor sizes every candidate to the SAME
+     * length, so a dropped word leaves a silent gap → fewer voiced frames. A garble is often the
+     * *majority* outcome, so consensus/medoid selection picks it; instead prefer the candidate
+     * with the MOST voiced content (closest to filling the intended duration with speech), which
+     * favours the complete render even when it's the minority. Ties (near-equal content, e.g. a
+     * substitution rather than a drop) fall back to the medoid — the self-consistent one.
+     */
+    private fun selectBestCandidate(cands: List<FloatArray>): Int {
+        val voiced = cands.map { voicedCount(it) }
+        val maxV = voiced.max().coerceAtLeast(1)
+        // Candidates within 6% of the fullest are "content-equivalent"; break that tie by medoid.
+        val threshold = maxV * 0.94
+        val full = cands.indices.filter { voiced[it] >= threshold }
+        cands.indices.forEach { Log.d(TAG, "cand $it voiced=${voiced[it]} full=${it in full}") }
+        val chosen = if (full.size == 1) full[0] else medoidAmong(cands, full)
+        Log.i(TAG, "select: chose candidate $chosen of ${cands.size} (voiced=${voiced[chosen]}/$maxV)")
+        return chosen
+    }
+
+    /** Number of speech (non-silent) samples — a proxy for how much of the utterance is present. */
+    private fun voicedCount(audio: FloatArray): Int {
+        var n = 0
+        for (v in audio) if (v > 0.02f || v < -0.02f) n++
+        return n
+    }
+
+    /** Medoid (min total DTW distance) restricted to a candidate subset. */
+    private fun medoidAmong(cands: List<FloatArray>, subset: List<Int>): Int {
+        if (subset.size == 1) return subset[0]
+        val feats = subset.associateWith { specFeature(cands[it]) }
+        var best = subset[0]; var bestTotal = Double.MAX_VALUE
+        for (i in subset) {
+            var total = 0.0
+            for (j in subset) if (i != j) total += dtwCost(feats[i]!!, feats[j]!!, specBands)
+            if (total < bestTotal) { bestTotal = total; best = i }
+        }
+        return best
+    }
+
+    /**
+     * DTW distance between two band-spectrograms (frames × [bands]), length-normalized. Time
+     * warping makes it robust to the prosody/timing jitter between two clean renders, so a
+     * dropped or substituted word stands out as the real difference — which raw frame-aligned
+     * L2 could not tell apart from natural variation.
+     */
+    private fun dtwCost(a: FloatArray, b: FloatArray, bands: Int): Double {
+        val na = a.size / bands; val nb = b.size / bands
+        if (na == 0 || nb == 0) return Double.MAX_VALUE / 4
+        val INF = Double.MAX_VALUE / 4
+        var prev = DoubleArray(nb + 1) { INF }
+        var cur = DoubleArray(nb + 1) { INF }
+        prev[0] = 0.0
+        for (i in 1..na) {
+            cur[0] = INF
+            val ao = (i - 1) * bands
+            for (j in 1..nb) {
+                val bo = (j - 1) * bands
+                var c = 0.0
+                for (k in 0 until bands) { val e = (a[ao + k] - b[bo + k]).toDouble(); c += e * e }
+                cur[j] = sqrt(c) + minOf(prev[j], cur[j - 1], prev[j - 1])
+            }
+            val t = prev; prev = cur; cur = t
+        }
+        return prev[nb] / (na + nb)
+    }
+
+    /** Coarse log-magnitude spectrogram (24 bands/frame) used only to compare candidates. */
+    private fun specFeature(audio: FloatArray): FloatArray {
+        val frame = 1024; val hop = 512; val bands = 24
+        val half = frame / 2
+        val binsPerBand = half / bands
+        val win = FloatArray(frame) { (0.5 - 0.5 * cos(2.0 * Math.PI * it / (frame - 1))).toFloat() }
+        val nFrames = if (audio.size < frame) 1 else 1 + (audio.size - frame) / hop
+        val re = DoubleArray(frame); val im = DoubleArray(frame)
+        val out = FloatArray(nFrames * bands)
+        for (f in 0 until nFrames) {
+            val start = f * hop
+            for (i in 0 until frame) {
+                val s = start + i
+                re[i] = if (s < audio.size) (audio[s] * win[i]).toDouble() else 0.0
+                im[i] = 0.0
+            }
+            fftInPlace(re, im)
+            for (b in 0 until bands) {
+                var e = 0.0
+                val lo = b * binsPerBand
+                for (k in lo until lo + binsPerBand) e += re[k] * re[k] + im[k] * im[k]
+                out[f * bands + b] = ln(e + 1e-6).toFloat()
+            }
+        }
+        return out
+    }
+
+    /** In-place iterative radix-2 Cooley–Tukey FFT (size must be a power of two). */
+    private fun fftInPlace(re: DoubleArray, im: DoubleArray) {
+        val n = re.size
+        var j = 0
+        for (i in 1 until n) {
+            var bit = n shr 1
+            while (j and bit != 0) { j = j xor bit; bit = bit shr 1 }
+            j = j or bit
+            if (i < j) {
+                val tr = re[i]; re[i] = re[j]; re[j] = tr
+                val ti = im[i]; im[i] = im[j]; im[j] = ti
+            }
+        }
+        var len = 2
+        while (len <= n) {
+            val ang = -2.0 * Math.PI / len
+            val wr = cos(ang); val wi = kotlin.math.sin(ang)
+            var i = 0
+            while (i < n) {
+                var cwr = 1.0; var cwi = 0.0
+                for (k in 0 until len / 2) {
+                    val ar = re[i + k]; val ai = im[i + k]
+                    val br = re[i + k + len / 2] * cwr - im[i + k + len / 2] * cwi
+                    val bi = re[i + k + len / 2] * cwi + im[i + k + len / 2] * cwr
+                    re[i + k] = ar + br; im[i + k] = ai + bi
+                    re[i + k + len / 2] = ar - br; im[i + k + len / 2] = ai - bi
+                    val ncwr = cwr * wr - cwi * wi; cwi = cwr * wi + cwi * wr; cwr = ncwr
+                }
+                i += len
+            }
+            len = len shl 1
+        }
+    }
+
     /** Random Gaussian noise via Box-Muller transform. */
-    private fun randomGaussian(count: Int): FloatArray {
-        val rng = java.util.Random()
+    private fun randomGaussian(count: Int, seed: Long? = null): FloatArray {
+        val rng = if (seed != null) java.util.Random(seed) else java.util.Random()
         val out = FloatArray(count)
         var i = 0
         while (i < count - 1) {

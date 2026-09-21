@@ -16,10 +16,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.coroutineContext
 
 /**
  * Main entry point for the TTS Supertonic 3 SDK.
@@ -30,6 +35,9 @@ import kotlinx.coroutines.launch
 class TtsSdk(private val config: TtsConfig) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    // Serialises synth+playback so overlapping speak() calls never drive the shared ONNX
+    // sessions / AudioTrack concurrently (the cause of overlapping, garbled output).
+    private val speakMutex = Mutex()
     private var engine: TtsEngine? = null
     private var modelConfig: ModelConfig? = null
     private var callback: TtsCallback? = null
@@ -76,6 +84,9 @@ class TtsSdk(private val config: TtsConfig) {
             return
         }
 
+        // Interrupt the current utterance: cancel its coroutine and stop its playback NOW, so
+        // the replacement can't overlap it. stopAudio() promptly wakes a blocked playAudio()
+        // so the cancelled job releases [speakMutex] quickly.
         cancelCurrentJob()
         eng.stopAudio()
 
@@ -84,29 +95,41 @@ class TtsSdk(private val config: TtsConfig) {
         val language = request.language ?: "en"
         val mc = modelConfig ?: return
 
-        currentJob = scope.launch {
-            try {
-                _isSpeaking.value = true
-                callback?.onStart(id)
+        val job = scope.launch {
+            speakMutex.withLock {
+                try {
+                    ensureActive() // already superseded → don't start
+                    _isSpeaking.value = true
+                    callback?.onStart(id)
 
-                val cleanText = TextPreprocessor.preprocess(request.text)
-                if (cleanText == null) {
-                    callback?.onError(id, TtsError.InvalidText("Text is empty after preprocessing"))
-                    return@launch
+                    val cleanText = TextPreprocessor.preprocess(request.text)
+                    if (cleanText == null) {
+                        callback?.onError(id, TtsError.InvalidText("Text is empty after preprocessing"))
+                        return@withLock
+                    }
+
+                    // Warm the audio output BEFORE synthesising, so the warm-up runs during the
+                    // (otherwise silent) ~1s synthesis window and the first word isn't clipped.
+                    eng.prepareStream(mc.sampleRate)
+                    val pcm = eng.synthesise(cleanText, voiceStyle, language)
+                    ensureActive() // superseded during synthesis → don't play a stale clip
+                    eng.playAudio(pcm, mc.sampleRate, request.volume)
+
+                    ensureActive()
+                    callback?.onDone(id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: TtsError) {
+                    callback?.onError(id, e)
+                } catch (e: Exception) {
+                    callback?.onError(id, TtsError.InferenceFailed(e.message ?: "Unknown error"))
+                } finally {
+                    // Only the current (not-superseded) job owns the speaking flag.
+                    if (coroutineContext[Job] === currentJob) _isSpeaking.value = false
                 }
-
-                val pcm = eng.synthesise(cleanText, voiceStyle, language)
-                eng.playAudio(pcm, mc.sampleRate, request.volume)
-
-                callback?.onDone(id)
-            } catch (e: TtsError) {
-                callback?.onError(id, e)
-            } catch (e: Exception) {
-                callback?.onError(id, TtsError.InferenceFailed(e.message ?: "Unknown error"))
-            } finally {
-                _isSpeaking.value = false
             }
         }
+        currentJob = job
     }
 
     /**

@@ -288,6 +288,10 @@ class IosTtsEngine : TtsEngine {
         }
     }
 
+    // No-op on iOS: the cold-start head clipping is specific to Android's AudioTrack. If iOS
+    // ever shows the same symptom, warm the AVAudioPlayer / engine here.
+    override fun prepareStream(sampleRate: Int) {}
+
     override fun playAudio(pcmData: FloatArray, sampleRate: Int, volume: Float) {
         stopAudio()
 

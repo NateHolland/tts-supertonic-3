@@ -58,7 +58,7 @@ expect fun platformInit()
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun App() {
+fun App(autoRun: String? = null, modelDirOverride: String? = null) {
     val scope = rememberCoroutineScope()
 
     var sdk by remember { mutableStateOf<TtsSdk?>(null) }
@@ -75,8 +75,10 @@ fun App() {
 
     LaunchedEffect(Unit) {
         try {
+            // A `-e model_dir <abs path>` launch extra points straight at an already-present
+            // model dir (e.g. one copied from the Kima app), skipping asset extraction.
             statusMessage = "Extracting model from assets..."
-            val modelPath = withContext(Dispatchers.Default) {
+            val modelPath = modelDirOverride ?: withContext(Dispatchers.Default) {
                 getBundledModelPath(MODEL_ID)
             }
 
@@ -106,6 +108,23 @@ fun App() {
         } catch (e: Exception) {
             loadError = "Failed to load model: ${e.message}"
             isLoading = false
+        }
+    }
+
+    // Headless driver: launch with `-e roundtrip sequential|rapid|both` to run the rig once
+    // the model is ready and log results to logcat (grep "KimaRig|"). No taps needed.
+    LaunchedEffect(sdk, autoRun) {
+        val ready = sdk ?: return@LaunchedEffect
+        val mode = autoRun ?: return@LaunchedEffect
+        val rig = RoundTripRig(ready)
+        when (mode.lowercase()) {
+            "sequential" -> rig.runSequential(ROUND_TRIP_PHRASES, voiceStyle = null)
+            "rapid" -> rig.runRapid(ROUND_TRIP_PHRASES, voiceStyle = null)
+            "collision" -> rig.runCollision(ROUND_TRIP_PHRASES, voiceStyle = null)
+            "both" -> {
+                rig.runSequential(ROUND_TRIP_PHRASES, voiceStyle = null)
+                rig.runRapid(ROUND_TRIP_PHRASES, voiceStyle = null)
+            }
         }
     }
 
@@ -327,6 +346,11 @@ fun App() {
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+
+                    RoundTripPanel(
+                        tts = currentSdk,
+                        voiceStyle = voices.getOrNull(selectedVoiceIndex)?.id,
+                    )
                 }
             }
         }

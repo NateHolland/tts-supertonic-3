@@ -2,7 +2,12 @@
 kotlin = "2.2.20"
 agp = "8.7.3"
 coroutines = "1.9.0"
-onnxruntime = "1.19.2"
+# onnxruntime-android 1.22.0 is the first release whose .so files (both
+# libonnxruntime.so and libonnxruntime4j_jni.so) are 16 KB page-aligned,
+# required for Google Play. 1.19.2 shipped 4 KB-aligned libs. iOS pod
+# (onnxruntime-objc, pinned in library.podspec) stays 1.19.2 — Apple has
+# no 16 KB page-size requirement.
+onnxruntime = "1.22.0"
 compose-multiplatform = "1.8.0"
 activity-compose = "1.9.3"
 lifecycle = "2.8.7"
