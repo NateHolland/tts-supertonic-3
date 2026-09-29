@@ -7,6 +7,13 @@ interface TtsEngine {
     fun synthesise(text: String, voiceStyleId: String, language: String): FloatArray
 
     /**
+     * Install a style built at runtime, so a voice designed in the app can be
+     * spoken without first being written to disk as a .json. Replaces any
+     * style already registered under [id].
+     */
+    fun registerVoice(id: String, styleTtl: FloatArray, styleDp: FloatArray)
+
+    /**
      * Warm the audio output path ahead of [playAudio]. Called before [synthesise] so the
      * warm-up overlaps synthesis (already-silent time) and adds no latency, avoiding the
      * cold-start clipping of a clip's first word. Safe to no-op where a platform doesn't need it.

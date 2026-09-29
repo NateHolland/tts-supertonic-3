@@ -140,6 +140,11 @@ class IosTtsEngine : TtsEngine {
         return ModelConfig(sampleRate = sampleRate, voices = voices, supportedLanguages = SupportedLanguages.codes)
     }
 
+    override fun registerVoice(id: String, styleTtl: FloatArray, styleDp: FloatArray) {
+        voiceStylesTtl[id] = StyleTensor(styleTtl, intArrayOf(1, 50, 256))
+        voiceStylesDp[id] = StyleTensor(styleDp, intArrayOf(1, 8, 16))
+    }
+
     override fun synthesise(text: String, voiceStyleId: String, language: String): FloatArray {
         val dpSess = dpSession ?: throw TtsError.ModelNotLoaded()
         val teSess = teSession ?: throw TtsError.ModelNotLoaded()
@@ -216,7 +221,11 @@ class IosTtsEngine : TtsEngine {
             println("[TTS] latentLen=$latentLen latentDimVal=$latentDimVal")
 
             val noiseSize = latentDimVal * latentLen
-            val noise = randomGaussian(noiseSize)
+            // Seeded from the text and the voice, as Android does: the same voice
+            // saying the same words renders the same way on both platforms, so a
+            // caller comparing renders of different voices compares the voices
+            // rather than two noise draws.
+            val noise = randomGaussian(noiseSize, (text + "|" + voiceStyleId).hashCode().toLong())
 
             val latentLength = ((wavLenMax + chunkSize - 1) / chunkSize).toInt()
             val latentMaskArray = FloatArray(latentLen) { i -> if (i < latentLength) 1.0f else 0.0f }
@@ -472,20 +481,21 @@ class IosTtsEngine : TtsEngine {
         return result
     }
 
-    private fun randomGaussian(count: Int): FloatArray {
+    private fun randomGaussian(count: Int, seed: Long): FloatArray {
+        val rng = Random(seed)
         val out = FloatArray(count)
         var i = 0
         while (i < count - 1) {
-            val u1 = maxOf(0.0001, minOf(0.9999, Random.nextDouble()))
-            val u2 = Random.nextDouble()
+            val u1 = maxOf(0.0001, minOf(0.9999, rng.nextDouble()))
+            val u2 = rng.nextDouble()
             val r = sqrt(-2.0 * ln(u1))
             out[i] = (r * cos(2.0 * PI * u2)).toFloat()
             out[i + 1] = (r * sin(2.0 * PI * u2)).toFloat()
             i += 2
         }
         if (count % 2 != 0) {
-            val u1 = maxOf(0.0001, minOf(0.9999, Random.nextDouble()))
-            val u2 = Random.nextDouble()
+            val u1 = maxOf(0.0001, minOf(0.9999, rng.nextDouble()))
+            val u2 = rng.nextDouble()
             out[count - 1] = (sqrt(-2.0 * ln(u1)) * cos(2.0 * PI * u2)).toFloat()
         }
         return out

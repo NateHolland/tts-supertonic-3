@@ -65,6 +65,16 @@ class TtsSdk(private val config: TtsConfig) {
         }
     }
 
+    /**
+     * Make a runtime-built voice speakable under [id]; pass that id as the
+     * voice style in a [SpeakRequest]. Used by the designer, where the style
+     * changes on every edit and never exists as a file.
+     */
+    fun registerVoice(id: String, styleTtl: FloatArray, styleDp: FloatArray) {
+        val eng = engine ?: throw TtsError.ModelNotLoaded("initialize() first")
+        eng.registerVoice(id, styleTtl, styleDp)
+    }
+
     fun speak(text: String) {
         speak(
             SpeakRequest(

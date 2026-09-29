@@ -216,6 +216,11 @@ class AndroidTtsEngine : TtsEngine {
 
     // ── Synthesis ─────────────────────────────────────────────────────────
 
+    override fun registerVoice(id: String, styleTtl: FloatArray, styleDp: FloatArray) {
+        voiceStylesTtl[id] = StyleTensor(styleTtl, intArrayOf(1, 50, 256))
+        voiceStylesDp[id] = StyleTensor(styleDp, intArrayOf(1, 8, 16))
+    }
+
     override fun synthesise(text: String, voiceStyleId: String, language: String): FloatArray {
         val env = ortEnvironment ?: throw TtsError.ModelNotLoaded()
         val dpSession = durationPredictorSession ?: throw TtsError.ModelNotLoaded()

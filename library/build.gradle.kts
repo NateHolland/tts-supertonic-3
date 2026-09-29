@@ -1,4 +1,4 @@
-val sdkVersion = "1.0.0"
+val sdkVersion = "1.1.0"
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)

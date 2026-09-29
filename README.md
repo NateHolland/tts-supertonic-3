@@ -13,7 +13,7 @@ running locally through ONNX Runtime — no network calls at inference time.
 Add the dependency to your `build.gradle.kts`:
 
 ```kotlin
-implementation("coach.kima.tts:tts-supertonic-3:1.0.0")
+implementation("coach.kima.tts:tts-supertonic-3:1.1.0")
 ```
 
 ## Model Setup
