@@ -221,7 +221,10 @@ class AndroidTtsEngine : TtsEngine {
         voiceStylesDp[id] = StyleTensor(styleDp, intArrayOf(1, 8, 16))
     }
 
-    override fun synthesise(text: String, voiceStyleId: String, language: String): FloatArray {
+    override fun synthesise(
+        text: String, voiceStyleId: String, language: String, speechRate: Float,
+    ): FloatArray {
+        require(speechRate > 0f) { "speechRate must be positive, was $speechRate" }
         val env = ortEnvironment ?: throw TtsError.ModelNotLoaded()
         val dpSession = durationPredictorSession ?: throw TtsError.ModelNotLoaded()
         val teSession = textEncoderSession ?: throw TtsError.ModelNotLoaded()
@@ -286,7 +289,9 @@ class AndroidTtsEngine : TtsEngine {
             dpResult.close()
 
             // Duration is a scalar (total seconds), apply speed factor
-            val speed = 1.05f
+            // 1.05 is the reference renderer's own base speed; speechRate scales
+            // it, which is what SpeakRequest.speechRate always promised and never did
+            val speed = 1.05f * speechRate
             val duration = durSeconds[0] / speed
             Log.i(TAG, "Duration: ${durSeconds[0]}s -> ${duration}s (speed=$speed)")
 

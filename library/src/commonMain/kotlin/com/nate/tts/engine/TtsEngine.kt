@@ -4,7 +4,13 @@ import com.nate.tts.config.ModelConfig
 
 interface TtsEngine {
     fun loadModel(modelDir: String): ModelConfig
-    fun synthesise(text: String, voiceStyleId: String, language: String): FloatArray
+    /**
+     * @param speechRate how fast to speak, 1.0 being the model's own pace; it
+     *   scales the predicted duration, so 2.0 takes half as long. Must be > 0.
+     */
+    fun synthesise(
+        text: String, voiceStyleId: String, language: String, speechRate: Float = 1.0f,
+    ): FloatArray
 
     /**
      * Install a style built at runtime, so a voice designed in the app can be

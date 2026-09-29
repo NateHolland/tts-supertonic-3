@@ -121,7 +121,7 @@ class TtsSdk(private val config: TtsConfig) {
                     // Warm the audio output BEFORE synthesising, so the warm-up runs during the
                     // (otherwise silent) ~1s synthesis window and the first word isn't clipped.
                     eng.prepareStream(mc.sampleRate)
-                    val pcm = eng.synthesise(cleanText, voiceStyle, language)
+                    val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
                     ensureActive() // superseded during synthesis → don't play a stale clip
                     eng.playAudio(pcm, mc.sampleRate, request.volume)
 
@@ -163,7 +163,7 @@ class TtsSdk(private val config: TtsConfig) {
         val cleanText = TextPreprocessor.preprocess(request.text)
             ?: throw TtsError.InvalidText("Text is empty after preprocessing")
 
-        val pcm = eng.synthesise(cleanText, voiceStyle, language)
+        val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
         val wavBytes = WavEncoder.encode(pcm, mc.sampleRate)
 
         try {
@@ -195,7 +195,7 @@ class TtsSdk(private val config: TtsConfig) {
         val cleanText = TextPreprocessor.preprocess(request.text)
             ?: throw TtsError.InvalidText("Text is empty after preprocessing")
 
-        val pcm = eng.synthesise(cleanText, voiceStyle, language)
+        val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
         return WavEncoder.encode(pcm, mc.sampleRate)
     }
 
@@ -218,7 +218,7 @@ class TtsSdk(private val config: TtsConfig) {
         val cleanText = TextPreprocessor.preprocess(request.text)
             ?: throw TtsError.InvalidText("Text is empty after preprocessing")
 
-        return eng.synthesise(cleanText, voiceStyle, language)
+        return eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
     }
 
     /** The sample rate of the loaded model, or null if not initialised. */
