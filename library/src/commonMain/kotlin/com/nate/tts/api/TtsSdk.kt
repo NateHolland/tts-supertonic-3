@@ -123,6 +123,7 @@ class TtsSdk(private val config: TtsConfig) {
                     eng.prepareStream(mc.sampleRate)
                     val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
                     ensureActive() // superseded during synthesis → don't play a stale clip
+                    callback?.onPlaying(id)
                     eng.playAudio(pcm, mc.sampleRate, request.volume)
 
                     ensureActive()
