@@ -327,9 +327,15 @@ class IosTtsEngine : TtsEngine {
             audioPlayer?.play()
             println("[TTS] Playing ${pcmData.size} samples")
 
-            // Block until playback completes (matches Android behavior)
+            // Block until playback completes (matches Android behavior): watch the
+            // player rather than sleeping for the duration, so the caller learns the
+            // end within ~20 ms; the deadline only guards against a player that never
+            // reports finishing (e.g. the session was taken away).
             val durationMs = (pcmData.size.toLong() * 1000L) / sampleRate
-            NSThread.sleepForTimeInterval(durationMs.toDouble() / 1000.0 + 0.5)
+            val deadline = NSDate().timeIntervalSince1970 + durationMs / 1000.0 + 1.0
+            while (audioPlayer?.playing == true && NSDate().timeIntervalSince1970 < deadline) {
+                NSThread.sleepForTimeInterval(0.02)
+            }
             _isPlaying = false
         } catch (e: Exception) {
             _isPlaying = false
