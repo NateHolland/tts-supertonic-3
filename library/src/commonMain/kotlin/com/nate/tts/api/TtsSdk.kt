@@ -6,6 +6,7 @@ import com.nate.tts.callback.TtsCallback
 import com.nate.tts.config.ModelConfig
 import com.nate.tts.config.TtsConfig
 import com.nate.tts.engine.PlatformEngineFactory
+import com.nate.tts.engine.SpeechChunker
 import com.nate.tts.engine.TextPreprocessor
 import com.nate.tts.engine.TtsEngine
 import com.nate.tts.error.TtsError
@@ -38,6 +39,30 @@ class TtsSdk(private val config: TtsConfig) {
     // Serialises synth+playback so overlapping speak() calls never drive the shared ONNX
     // sessions / AudioTrack concurrently (the cause of overlapping, garbled output).
     private val speakMutex = Mutex()
+
+    /**
+     * Rendered pieces by (text, voice, language, rate): coaching repeats short cues ("Again.",
+     * "Good.") constantly, and a cached one plays with no synthesis at all. Small and in-memory
+     * (a 2 s piece is ~350 KB of floats).
+     */
+    private val pcmCache = LinkedHashMap<String, FloatArray>()
+    private val cacheLock = Mutex()
+
+    private suspend fun cachedSynthesise(
+        eng: TtsEngine, text: String, voiceStyle: String, language: String, rate: Float,
+    ): FloatArray {
+        val key = "$voiceStyle|$language|$rate|$text"
+        cacheLock.withLock {
+            // Least-recently-used: a hit moves to the back, the front is evicted.
+            pcmCache.remove(key)?.let { pcmCache[key] = it; return it }
+        }
+        val pcm = eng.synthesise(text, voiceStyle, language, rate)
+        cacheLock.withLock {
+            pcmCache[key] = pcm
+            while (pcmCache.size > 40) pcmCache.remove(pcmCache.keys.first())
+        }
+        return pcm
+    }
     private var engine: TtsEngine? = null
     private var modelConfig: ModelConfig? = null
     private var callback: TtsCallback? = null
@@ -121,10 +146,26 @@ class TtsSdk(private val config: TtsConfig) {
                     // Warm the audio output BEFORE synthesising, so the warm-up runs during the
                     // (otherwise silent) ~1s synthesis window and the first word isn't clipped.
                     eng.prepareStream(mc.sampleRate)
-                    val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
-                    ensureActive() // superseded during synthesis → don't play a stale clip
-                    callback?.onPlaying(id)
-                    eng.playAudio(pcm, mc.sampleRate, request.volume)
+                    // Sentence by sentence: the first piece plays as soon as it is rendered and
+                    // the next renders while it plays, so a long line starts as fast as a short
+                    // one. One piece of look-ahead; cancelling this job cancels the renderer.
+                    val pieces = SpeechChunker.split(cleanText)
+                    val rendered = kotlinx.coroutines.channels.Channel<FloatArray>(capacity = 1)
+                    kotlinx.coroutines.coroutineScope {
+                        launch {
+                            for (piece in pieces) {
+                                ensureActive()
+                                rendered.send(cachedSynthesise(eng, piece, voiceStyle, language, request.speechRate))
+                            }
+                            rendered.close()
+                        }
+                        var first = true
+                        for (pcm in rendered) {
+                            ensureActive() // superseded during synthesis → don't play a stale clip
+                            if (first) { callback?.onPlaying(id); first = false }
+                            eng.playAudio(pcm, mc.sampleRate, request.volume)
+                        }
+                    }
 
                     ensureActive()
                     callback?.onDone(id)

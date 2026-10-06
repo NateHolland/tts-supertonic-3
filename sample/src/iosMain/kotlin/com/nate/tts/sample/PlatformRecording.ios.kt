@@ -21,3 +21,7 @@ actual fun openInMediaPlayer(path: String) {
     val rootVC = UIApplication.sharedApplication.keyWindow?.rootViewController
     rootVC?.presentViewController(activityVC, animated = true, completion = null)
 }
+
+actual fun readLinesOf(path: String): List<String> = emptyList()
+
+actual fun ensureDir(path: String) {}

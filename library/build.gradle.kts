@@ -1,4 +1,4 @@
-val sdkVersion = "1.1.0"
+val sdkVersion = "1.1.1-local"
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)
@@ -70,7 +70,8 @@ android {
 
 mavenPublishing {
     publishToMavenCentral(com.vanniktech.maven.publish.SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
+    // `-PnoSign` for a local (publishToMavenLocal) build without the release key.
+    if (!project.hasProperty("noSign")) signAllPublications()
 
     coordinates("coach.kima.tts", "tts-supertonic-3", sdkVersion)
 

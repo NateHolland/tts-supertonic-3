@@ -116,6 +116,27 @@ fun App(autoRun: String? = null, modelDirOverride: String? = null) {
     LaunchedEffect(sdk, autoRun) {
         val ready = sdk ?: return@LaunchedEffect
         val mode = autoRun ?: return@LaunchedEffect
+        // `-e roundtrip wavs:<label>`: render every line of <model_dir>/../phrases.txt to
+        // <model_dir>/../wavs_<label>/NNN.wav, one at a time, logging each render's time —
+        // for transcribing on a computer (garble rate) and timing (grep "KimaWavs").
+        if (mode.startsWith("wavs")) {
+            val label = mode.substringAfter(':', "run")
+            val root = (modelDirOverride ?: return@LaunchedEffect).trimEnd('/').substringBeforeLast('/')
+            val outDir = "$root/wavs_$label"
+            ensureDir(outDir)
+            val phrases = readLinesOf("$root/phrases.txt").filter { it.isNotBlank() }
+            println("KimaWavs| start label=$label phrases=${phrases.size}")
+            phrases.forEachIndexed { i, text ->
+                val path = "$outDir/${(i + 1).toString().padStart(3, '0')}.wav"
+                val t0 = kotlin.time.TimeSource.Monotonic.markNow()
+                withContext(Dispatchers.Default) {
+                    ready.synthesiseToFile(SpeakRequest(text = text, voiceStyle = "M3"), path)
+                }
+                println("KimaWavs| ${i + 1} ms=${t0.elapsedNow().inWholeMilliseconds} text=$text")
+            }
+            println("KimaWavs| done label=$label")
+            return@LaunchedEffect
+        }
         val rig = RoundTripRig(ready)
         when (mode.lowercase()) {
             "sequential" -> rig.runSequential(ROUND_TRIP_PHRASES, voiceStyle = null)

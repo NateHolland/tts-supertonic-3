@@ -11,3 +11,9 @@ expect fun getRecordingOutputPath(fileName: String = "tts_recording.wav"): Strin
  * or presents a share/open dialog.
  */
 expect fun openInMediaPlayer(path: String)
+
+/** Lines of a text file (the `wavs` auto-run's phrase list); empty if it can't be read. */
+expect fun readLinesOf(path: String): List<String>
+
+/** Creates a directory (and parents) if missing. */
+expect fun ensureDir(path: String)

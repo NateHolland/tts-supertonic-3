@@ -94,7 +94,7 @@ class AndroidTtsEngine : TtsEngine {
      * keeping the most-complete one removes it. 1 disables best-of-N (single render). The
      * candidates render concurrently, so N>1 costs far less than N× a single render.
      */
-    var synthBestOfN: Int = 3
+    var synthBestOfN: Int = debugProp("debug.tts.bestof")?.toIntOrNull()?.coerceIn(1, 5) ?: 1
 
     /** latentDim * chunkCompressFactor — the actual channel dimension for latent tensors */
     private val latentDimVal: Int get() = latentDim * chunkCompressFactor
@@ -139,11 +139,15 @@ class AndroidTtsEngine : TtsEngine {
             // SoC, leaving most of the CPU idle and inflating synth latency (which best-of-N
             // multiplies). Cap so we favour the big cores and don't thrash the little ones.
             val cores = Runtime.getRuntime().availableProcessors()
-            val intraOp = cores.coerceIn(2, 6)
-            Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores)")
+            // Debug overrides (adb shell setprop …), read at load: debug.tts.intra = intra-op
+            // threads per model; debug.tts.spin = 0 stops idle ONNX threads busy-waiting.
+            val intraOp = debugProp("debug.tts.intra")?.toIntOrNull()?.coerceIn(1, 8) ?: cores.coerceIn(2, 6)
+            val spin = debugProp("debug.tts.spin")
+            Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores), spinning=${spin ?: "default"}, bestOf=$synthBestOfN")
             val opts = OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(intraOp)
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
+                if (spin != null) addConfigEntry("session.intra_op.allow_spinning", if (spin == "0") "0" else "1")
             }
 
             Log.i(TAG, "Loading ONNX models...")
@@ -278,6 +282,7 @@ class AndroidTtsEngine : TtsEngine {
             ).also { tensorsToClose.add(it) }
 
             // ── Step 1: Duration Prediction ──
+            val synthStartNs = System.nanoTime()
             Log.d(TAG, "Step 1: Duration prediction...")
             val dpResult = dpSession.run(mapOf(
                 "text_ids" to textIdsTensor,
@@ -397,6 +402,7 @@ class AndroidTtsEngine : TtsEngine {
 
             val audio = if (candidates.size <= 1) candidates[0] else candidates[selectBestCandidate(candidates)]
 
+            Log.i(TAG, "SynthTiming: ${(System.nanoTime() - synthStartNs) / 1_000_000}ms for ${audio.size / sampleRate.toFloat()}s of audio, bestOf=$synthBestOfN")
             Log.i(TAG, "Synthesis done: ${audio.size} samples (${audio.size / sampleRate.toFloat()}s) " +
                 "min=${audio.min()} max=${audio.max()}")
 
@@ -829,3 +835,9 @@ class AndroidTtsEngine : TtsEngine {
         }
     }
 }
+
+/** A debug system property (adb shell setprop), or null if unset/empty. */
+private fun debugProp(name: String): String? = runCatching {
+    val cls = Class.forName("android.os.SystemProperties")
+    (cls.getMethod("get", String::class.java, String::class.java).invoke(null, name, "") as String)
+}.getOrNull()?.takeIf { it.isNotBlank() }

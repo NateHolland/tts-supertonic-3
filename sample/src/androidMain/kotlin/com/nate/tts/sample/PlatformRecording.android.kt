@@ -29,3 +29,8 @@ actual fun openInMediaPlayer(path: String) {
     }
     context.startActivity(intent)
 }
+
+actual fun readLinesOf(path: String): List<String> =
+    runCatching { java.io.File(path).readLines() }.getOrDefault(emptyList())
+
+actual fun ensureDir(path: String) { java.io.File(path).mkdirs() }
