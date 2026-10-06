@@ -406,8 +406,9 @@ class AndroidTtsEngine : TtsEngine {
             Log.i(TAG, "Synthesis done: ${audio.size} samples (${audio.size / sampleRate.toFloat()}s) " +
                 "min=${audio.min()} max=${audio.max()}")
 
-            // Debug WAV export
-            try {
+            // Debug WAV export — opt-in (setprop debug.tts.wav 1): it wrote ~250 KB to disk after
+            // every line, before playback, on every install.
+            if (debugProp("debug.tts.wav") == "1") try {
                 val debugDir = File(File(modelDir ?: "").parentFile, "debug")
                 debugDir.mkdirs()
                 saveWav(File(debugDir, "tts_debug.wav"), audio, sampleRate)
