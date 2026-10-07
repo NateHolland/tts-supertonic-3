@@ -14,3 +14,26 @@ actual fun writeBytes(path: String, data: ByteArray) {
     }
     nsData.writeToFile(path, atomically = true)
 }
+
+actual fun readBytesOrNull(path: String): ByteArray? {
+    val data = NSData.create(contentsOfFile = path) ?: return null
+    val size = data.length.toInt()
+    if (size == 0) return ByteArray(0)
+    val out = ByteArray(size)
+    out.usePinned { pinned -> platform.posix.memcpy(pinned.addressOf(0), data.bytes, data.length) }
+    return out
+}
+
+actual fun ensureDirectory(path: String) {
+    platform.Foundation.NSFileManager.defaultManager.createDirectoryAtPath(
+        path, withIntermediateDirectories = true, attributes = null, error = null,
+    )
+}
+
+actual fun listFileNames(path: String): List<String> =
+    platform.Foundation.NSFileManager.defaultManager.contentsOfDirectoryAtPath(path, error = null)
+        ?.filterIsInstance<String>() ?: emptyList()
+
+actual fun deleteFile(path: String) {
+    platform.Foundation.NSFileManager.defaultManager.removeItemAtPath(path, error = null)
+}

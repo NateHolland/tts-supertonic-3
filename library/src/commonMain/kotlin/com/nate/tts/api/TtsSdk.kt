@@ -1,5 +1,9 @@
 package com.nate.tts.api
 
+import com.nate.tts.audio.deleteFile
+import com.nate.tts.audio.listFileNames
+import com.nate.tts.audio.ensureDirectory
+import com.nate.tts.audio.readBytesOrNull
 import com.nate.tts.audio.WavEncoder
 import com.nate.tts.audio.writeBytes
 import com.nate.tts.callback.TtsCallback
@@ -48,15 +52,63 @@ class TtsSdk(private val config: TtsConfig) {
     private val pcmCache = LinkedHashMap<String, FloatArray>()
     private val cacheLock = Mutex()
 
+    /** Pieces from [prerender] when there's no [TtsConfig.phraseCacheDir]: kept in memory. */
+    private val pinnedCache = HashMap<String, FloatArray>()
+
+    /** Per voice id, what its audio depends on; see [registerVoice]. */
+    private val voiceFingerprints = HashMap<String, String>()
+
+    private fun phrasePath(voiceStyle: String, language: String, rate: Float, text: String): String? {
+        val dir = config.phraseCacheDir ?: return null
+        val voice = voiceFingerprints[voiceStyle] ?: voiceStyle
+        return "$dir/${fnv64("${config.modelDir}|$voice|$language|$rate|$text")}.s16"
+    }
+
+    private fun readPhrase(voiceStyle: String, language: String, rate: Float, text: String): FloatArray? {
+        val bytes = phrasePath(voiceStyle, language, rate, text)?.let { readBytesOrNull(it) } ?: return null
+        if (bytes.isEmpty() || bytes.size % 2 != 0) return null
+        // 16-bit little-endian: half the size of the float samples, and inaudible for speech
+        // (103 coaching lines went from 23 MB to ~11 MB).
+        return FloatArray(bytes.size / 2) { i ->
+            val v = (bytes[i * 2].toInt() and 0xFF) or (bytes[i * 2 + 1].toInt() shl 8)
+            v.toShort() / 32768f
+        }
+    }
+
+    private fun writePhrase(path: String, pcm: FloatArray) {
+        val bytes = ByteArray(pcm.size * 2)
+        for (i in pcm.indices) {
+            val v = (pcm[i].coerceIn(-1f, 1f) * 32767f).toInt()
+            bytes[i * 2] = v.toByte(); bytes[i * 2 + 1] = (v shr 8).toByte()
+        }
+        config.phraseCacheDir?.let { ensureDirectory(it) }
+        writeBytes(path, bytes)
+    }
+
     private suspend fun cachedSynthesise(
-        eng: TtsEngine, text: String, voiceStyle: String, language: String, rate: Float,
+        eng: TtsEngine, text: String, voiceStyle: String, language: String, rate: Float, id: String? = null,
     ): FloatArray {
         val key = "$voiceStyle|$language|$rate|$text"
         cacheLock.withLock {
+            pinnedCache[key]?.let {
+                if (id != null) callback?.onPieceRendered(id, text, 0, cached = true)
+                return it
+            }
             // Least-recently-used: a hit moves to the back, the front is evicted.
-            pcmCache.remove(key)?.let { pcmCache[key] = it; return it }
+            pcmCache.remove(key)?.let {
+                pcmCache[key] = it
+                if (id != null) callback?.onPieceRendered(id, text, 0, cached = true)
+                return it
+            }
         }
+        readPhrase(voiceStyle, language, rate, text)?.let { pcm ->
+            cacheLock.withLock { pcmCache[key] = pcm }
+            if (id != null) callback?.onPieceRendered(id, text, 0, cached = true)
+            return pcm
+        }
+        val started = kotlin.time.TimeSource.Monotonic.markNow()
         val pcm = eng.synthesise(text, voiceStyle, language, rate)
+        if (id != null) callback?.onPieceRendered(id, text, started.elapsedNow().inWholeMilliseconds, cached = false)
         cacheLock.withLock {
             pcmCache[key] = pcm
             while (pcmCache.size > 40) pcmCache.remove(pcmCache.keys.first())
@@ -98,6 +150,13 @@ class TtsSdk(private val config: TtsConfig) {
     fun registerVoice(id: String, styleTtl: FloatArray, styleDp: FloatArray) {
         val eng = engine ?: throw TtsError.ModelNotLoaded("initialize() first")
         eng.registerVoice(id, styleTtl, styleDp)
+        // A runtime voice keeps its id when its data changes (an app's "remote" voice), so the
+        // phrase cache keys on the data, never the id.
+        val h = StringBuilder()
+        h.append(styleTtl.size).append(':').append(styleDp.size)
+        for (f in styleTtl) h.append(',').append(f.toRawBits())
+        for (f in styleDp) h.append(',').append(f.toRawBits())
+        voiceFingerprints[id] = "$id#${fnv64(h.toString())}"
     }
 
     fun speak(text: String) {
@@ -155,7 +214,7 @@ class TtsSdk(private val config: TtsConfig) {
                         launch {
                             for (piece in pieces) {
                                 ensureActive()
-                                rendered.send(cachedSynthesise(eng, piece, voiceStyle, language, request.speechRate))
+                                rendered.send(cachedSynthesise(eng, piece, voiceStyle, language, request.speechRate, id))
                             }
                             rendered.close()
                         }
@@ -182,6 +241,48 @@ class TtsSdk(private val config: TtsConfig) {
             }
         }
         currentJob = job
+    }
+
+    /**
+     * Render [texts] ahead of time so speaking them later costs no synthesis at all.
+     *
+     * For the lines an app says constantly ("Good.", "Again."), rendered while the CPU is free
+     * rather than at the moment they're needed. Pieces are split and keyed exactly as [speak]
+     * does, so a later speak() of the same text, voice and rate is a pure cache hit. One piece at
+     * a time, and a piece is skipped (not waited for) while something is being spoken, so this
+     * never delays real speech; cancel the calling coroutine to stop between pieces. With a
+     * [TtsConfig.phraseCacheDir] the pieces go to disk and are rendered once, ever, per voice;
+     * without one they're kept in memory for this SDK's lifetime. Returns how many pieces were
+     * rendered (0 when everything was already cached).
+     */
+    suspend fun prerender(texts: List<String>, voiceStyle: String? = null, speechRate: Float = config.defaultSpeechRate): Int {
+        val eng = engine ?: return 0
+        val style = voiceStyle ?: currentVoiceStyle
+        val pieces = texts.mapNotNull { TextPreprocessor.preprocess(it) }.flatMap { SpeechChunker.split(it) }.distinct()
+        // The directory holds exactly this set: whatever an earlier voice, rate or line list
+        // left behind is deleted rather than kept forever.
+        config.phraseCacheDir?.let { dir ->
+            val keep = pieces.mapNotNull { phrasePath(style, "en", speechRate, it)?.substringAfterLast('/') }.toSet()
+            listFileNames(dir).filter { it !in keep }.forEach { deleteFile("$dir/$it") }
+        }
+        var rendered = 0
+        for (piece in pieces) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val key = "$style|en|$speechRate|$piece"
+            val path = phrasePath(style, "en", speechRate, piece)
+            val have = if (path != null) readBytesOrNull(path) != null
+                else cacheLock.withLock { pinnedCache.containsKey(key) }
+            if (have) continue
+            if (!speakMutex.tryLock()) continue
+            try {
+                val pcm = eng.synthesise(piece, style, "en", speechRate)
+                if (path != null) writePhrase(path, pcm) else cacheLock.withLock { pinnedCache[key] = pcm }
+                rendered++
+            } finally {
+                speakMutex.unlock()
+            }
+        }
+        return rendered
     }
 
     /**
@@ -300,4 +401,14 @@ class TtsSdk(private val config: TtsConfig) {
         currentJob?.cancel()
         currentJob = null
     }
+}
+
+/** FNV-1a, 64-bit, as hex: stable across launches and platforms (String.hashCode is 32-bit). */
+private fun fnv64(s: String): String {
+    var h = -0x340d631b7bdddcdbL // 0xcbf29ce484222325
+    for (b in s.encodeToByteArray()) {
+        h = h xor (b.toLong() and 0xFF)
+        h *= 0x100000001b3L
+    }
+    return h.toULong().toString(16)
 }

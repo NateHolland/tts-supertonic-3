@@ -141,6 +141,10 @@ class AndroidTtsEngine : TtsEngine {
             val cores = Runtime.getRuntime().availableProcessors()
             // Debug overrides (adb shell setprop …), read at load: debug.tts.intra = intra-op
             // threads per model; debug.tts.spin = 0 stops idle ONNX threads busy-waiting.
+            // Tried and dropped (Oct 2026, A36 rig, detection fps while a line renders): nice 10
+            // halved synthesis speed with no detection gain; ONNX ignores intra-op thread
+            // affinities on Android, so pinning to the little cores did nothing; 1, 3 or 4
+            // threads traded detection-during-speech against detection-otherwise, net worse.
             val intraOp = debugProp("debug.tts.intra")?.toIntOrNull()?.coerceIn(1, 8) ?: cores.coerceIn(2, 6)
             val spin = debugProp("debug.tts.spin")
             Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores), spinning=${spin ?: "default"}, bestOf=$synthBestOfN")
