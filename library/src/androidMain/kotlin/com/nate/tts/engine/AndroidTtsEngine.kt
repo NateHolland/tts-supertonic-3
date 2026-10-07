@@ -107,10 +107,15 @@ class AndroidTtsEngine : TtsEngine {
 
     // ── Model Loading ────────────────────────────────────────────────────
 
+    /** Flow-matching steps per render (debug.tts.steps); the model was released at 5. */
+    private var synthSteps = 5
+
     override fun loadModel(modelDir: String): ModelConfig {
         release()
 
-        val dir = File(modelDir)
+        // debug.tts.modeldir points at another copy of the model (e.g. a quantised one) for
+        // speed/quality comparisons; ignored unless it exists.
+        val dir = debugProp("debug.tts.modeldir")?.let(::File)?.takeIf { it.isDirectory } ?: File(modelDir)
         if (!dir.exists() || !dir.isDirectory) {
             throw TtsError.ModelNotLoaded("Model directory not found: $modelDir")
         }
@@ -147,11 +152,18 @@ class AndroidTtsEngine : TtsEngine {
             // threads traded detection-during-speech against detection-otherwise, net worse.
             val intraOp = debugProp("debug.tts.intra")?.toIntOrNull()?.coerceIn(1, 8) ?: cores.coerceIn(2, 6)
             val spin = debugProp("debug.tts.spin")
-            Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores), spinning=${spin ?: "default"}, bestOf=$synthBestOfN")
+            synthSteps = debugProp("debug.tts.steps")?.toIntOrNull()?.coerceIn(1, 16) ?: 5
+            Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores), spinning=${spin ?: "default"}, bestOf=$synthBestOfN, steps=$synthSteps, ep=${debugProp("debug.tts.ep") ?: "cpu"}, model=${dir.absolutePath}")
             val opts = OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(intraOp)
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
                 if (spin != null) addConfigEntry("session.intra_op.allow_spinning", if (spin == "0") "0" else "1")
+                // debug.tts.ep = xnnpack | nnapi: try another execution provider (the CPU one
+                // takes whatever it can't run).
+                when (debugProp("debug.tts.ep")?.lowercase()) {
+                    "xnnpack" -> addXnnpack(mapOf("intra_op_num_threads" to intraOp.toString()))
+                    "nnapi" -> addNnapi()
+                }
             }
 
             Log.i(TAG, "Loading ONNX models...")
@@ -331,7 +343,7 @@ class AndroidTtsEngine : TtsEngine {
                 longArrayOf(1, 1, latentLen.toLong())
             ).also { tensorsToClose.add(it) }
 
-            val totalSteps = 5
+            val totalSteps = synthSteps
             val trimLength = min((sampleRate * duration).toInt(), Int.MAX_VALUE)
 
             // ── Steps 4+5: best-of-N flow matching + vocoding ──

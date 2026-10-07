@@ -4,6 +4,7 @@ package com.nate.tts.sample
 
 import platform.Foundation.NSTemporaryDirectory
 import platform.Foundation.NSURL
+import platform.Foundation.create
 import platform.UIKit.UIActivityViewController
 import platform.UIKit.UIApplication
 
@@ -22,6 +23,12 @@ actual fun openInMediaPlayer(path: String) {
     rootVC?.presentViewController(activityVC, animated = true, completion = null)
 }
 
-actual fun readLinesOf(path: String): List<String> = emptyList()
+actual fun readLinesOf(path: String): List<String> =
+    (platform.Foundation.NSString.create(contentsOfFile = path, encoding = platform.Foundation.NSUTF8StringEncoding, error = null)
+        ?.toString() ?: "").lines()
 
-actual fun ensureDir(path: String) {}
+actual fun ensureDir(path: String) {
+    platform.Foundation.NSFileManager.defaultManager.createDirectoryAtPath(
+        path, withIntermediateDirectories = true, attributes = null, error = null,
+    )
+}

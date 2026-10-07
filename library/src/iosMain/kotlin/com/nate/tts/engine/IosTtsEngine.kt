@@ -46,7 +46,18 @@ class IosTtsEngine : TtsEngine {
         get() = _isPlaying
         private set(value) { _isPlaying = value }
 
-    override fun loadModel(modelDir: String): ModelConfig {
+    /** Flow-matching steps per render (launch arg -tts_steps); the model was released at 5. */
+    private var synthSteps = 5
+
+    override fun loadModel(modelDir: String): ModelConfig = loadModelFrom(
+        // -tts_model_dir points at another copy of the model (e.g. a quantised one) for
+        // speed/quality comparisons; ignored unless it exists.
+        debugDefault("tts_model_dir")
+            ?.let { if (it.startsWith("/")) it else "${documentsDir()}/$it" }
+            ?.takeIf { NSFileManager.defaultManager.fileExistsAtPath(it) } ?: modelDir,
+    )
+
+    private fun loadModelFrom(modelDir: String): ModelConfig {
         release()
 
         val fm = NSFileManager.defaultManager
@@ -99,6 +110,28 @@ class IosTtsEngine : TtsEngine {
             val opts = ortCall("ORTSessionOptions") { e -> ORTSessionOptions(error = e) }
             ortCall("setIntraOpNumThreads") { e -> opts.setIntraOpNumThreads(2, error = e); true }
             ortCall("setGraphOptimizationLevel") { e -> opts.setGraphOptimizationLevel(ORTGraphOptimizationLevel.ORTGraphOptimizationLevelAll, error = e); true }
+            // -tts_ep coreml | coreml_nn | xnnpack: try another execution provider (the CPU one
+            // takes whatever it can't run). coreml = ML Program format, coreml_nn = the older
+            // NeuralNetwork format (ML Program aborted at load on iOS 26 with ORT 1.19:
+            // "Cannot provide zero compute device types").
+            val ep = debugDefault("tts_ep")?.lowercase()
+            when (ep) {
+                "coreml", "coreml_nn" -> ortCall("appendCoreML") { e ->
+                    opts.appendCoreMLExecutionProviderWithOptions(
+                        ORTCoreMLExecutionProviderOptions().apply {
+                            createMLProgram = ep == "coreml"
+                        },
+                        error = e,
+                    )
+                }
+                "xnnpack" -> ortCall("appendXnnpack") { e ->
+                    opts.appendXnnpackExecutionProviderWithOptions(
+                        ORTXnnpackExecutionProviderOptions().apply { intra_op_num_threads = 2 }, error = e,
+                    )
+                }
+            }
+            synthSteps = debugDefault("tts_steps")?.toIntOrNull()?.coerceIn(1, 16) ?: 5
+            println("[TTS] steps=$synthSteps ep=${ep ?: "cpu"} model=$modelDir")
 
             println("[TTS] Loading ONNX models...")
             dpSession = ortCall("DP session") { e -> ORTSession(env = env, modelPath = "$modelDir/duration_predictor.onnx", sessionOptions = opts, error = e) }
@@ -244,7 +277,7 @@ class IosTtsEngine : TtsEngine {
             val latentMaskTensor = createFloatTensor(latentMaskArray, longArrayOf(1, 1, latentLen.toLong()))
 
             // Step 4: VE denoising
-            val totalSteps = 5
+            val totalSteps = synthSteps
             var xt = noise
             println("[TTS] Step 4: VE denoising ($totalSteps steps)...")
 
@@ -565,3 +598,11 @@ class IosTtsEngine : TtsEngine {
         return nsData
     }
 }
+
+/** A launch-argument debug setting (`-key value` lands in the argument domain of user defaults). */
+private fun debugDefault(key: String): String? =
+    NSUserDefaults.standardUserDefaults.stringForKey(key)?.takeIf { it.isNotBlank() }
+
+/** The app's Documents directory (a relative -tts_model_dir is taken under it). */
+private fun documentsDir(): String =
+    (NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true).firstOrNull() as? String).orEmpty()
