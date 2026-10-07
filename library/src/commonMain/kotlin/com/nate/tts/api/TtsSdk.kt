@@ -61,7 +61,7 @@ class TtsSdk(private val config: TtsConfig) {
     private fun phrasePath(voiceStyle: String, language: String, rate: Float, text: String): String? {
         val dir = config.phraseCacheDir ?: return null
         val voice = voiceFingerprints[voiceStyle] ?: voiceStyle
-        return "$dir/${fnv64("${config.modelDir}|$voice|$language|$rate|$text")}.s16"
+        return "$dir/${fnv64("${config.modelDir}|${config.flowSteps}|$voice|$language|$rate|$text")}.s16"
     }
 
     private fun readPhrase(voiceStyle: String, language: String, rate: Float, text: String): FloatArray? {
@@ -133,6 +133,7 @@ class TtsSdk(private val config: TtsConfig) {
         engine?.release()
         val eng = PlatformEngineFactory.create()
         val parsedConfig = eng.loadModel(config.modelDir)
+        eng.flowSteps = config.flowSteps
         engine = eng
         modelConfig = parsedConfig
 

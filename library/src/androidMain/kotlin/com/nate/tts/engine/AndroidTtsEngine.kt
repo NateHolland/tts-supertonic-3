@@ -107,8 +107,10 @@ class AndroidTtsEngine : TtsEngine {
 
     // ── Model Loading ────────────────────────────────────────────────────
 
-    /** Flow-matching steps per render (debug.tts.steps); the model was released at 5. */
-    private var synthSteps = 5
+    /** Flow-matching steps per render: [flowSteps], unless debug.tts.steps overrides it. */
+    private var debugSteps: Int? = null
+    override var flowSteps: Int = 5
+    private val synthSteps get() = debugSteps ?: flowSteps
 
     override fun loadModel(modelDir: String): ModelConfig {
         release()
@@ -152,7 +154,7 @@ class AndroidTtsEngine : TtsEngine {
             // threads traded detection-during-speech against detection-otherwise, net worse.
             val intraOp = debugProp("debug.tts.intra")?.toIntOrNull()?.coerceIn(1, 8) ?: cores.coerceIn(2, 6)
             val spin = debugProp("debug.tts.spin")
-            synthSteps = debugProp("debug.tts.steps")?.toIntOrNull()?.coerceIn(1, 16) ?: 5
+            debugSteps = debugProp("debug.tts.steps")?.toIntOrNull()?.coerceIn(1, 16)
             Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores), spinning=${spin ?: "default"}, bestOf=$synthBestOfN, steps=$synthSteps, ep=${debugProp("debug.tts.ep") ?: "cpu"}, model=${dir.absolutePath}")
             val opts = OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(intraOp)
@@ -418,7 +420,7 @@ class AndroidTtsEngine : TtsEngine {
 
             val audio = if (candidates.size <= 1) candidates[0] else candidates[selectBestCandidate(candidates)]
 
-            Log.i(TAG, "SynthTiming: ${(System.nanoTime() - synthStartNs) / 1_000_000}ms for ${audio.size / sampleRate.toFloat()}s of audio, bestOf=$synthBestOfN")
+            Log.i(TAG, "SynthTiming: ${(System.nanoTime() - synthStartNs) / 1_000_000}ms for ${audio.size / sampleRate.toFloat()}s of audio, bestOf=$synthBestOfN, steps=$synthSteps")
             Log.i(TAG, "Synthesis done: ${audio.size} samples (${audio.size / sampleRate.toFloat()}s) " +
                 "min=${audio.min()} max=${audio.max()}")
 

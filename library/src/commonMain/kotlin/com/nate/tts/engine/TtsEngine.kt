@@ -4,6 +4,12 @@ import com.nate.tts.config.ModelConfig
 
 interface TtsEngine {
     fun loadModel(modelDir: String): ModelConfig
+
+    /**
+     * Flow-matching steps per render ([com.nate.tts.config.TtsConfig.flowSteps]). Fewer is
+     * faster and, past a point, audibly worse; a debug override on the device wins over this.
+     */
+    var flowSteps: Int
     /**
      * @param speechRate how fast to speak, 1.0 being the model's own pace; it
      *   scales the predicted duration, so 2.0 takes half as long. Must be > 0.

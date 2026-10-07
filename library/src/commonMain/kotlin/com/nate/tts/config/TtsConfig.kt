@@ -11,4 +11,11 @@ data class TtsConfig(
      * changed voice never replays the old one's audio.
      */
     val phraseCacheDir: String? = null,
+    /**
+     * Flow-matching steps per render. The model was released at 5; each step is roughly a
+     * fifth of the render. Where the floor is depends on the model and device: with the int8
+     * flow network, 4 still sounded right on a Galaxy A36 and 3 didn't, while on an iPhone 17 Pro
+     * 4 already did not (Oct 2026 listening test).
+     */
+    val flowSteps: Int = 5,
 )

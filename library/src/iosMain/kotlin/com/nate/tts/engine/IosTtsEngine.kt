@@ -46,8 +46,10 @@ class IosTtsEngine : TtsEngine {
         get() = _isPlaying
         private set(value) { _isPlaying = value }
 
-    /** Flow-matching steps per render (launch arg -tts_steps); the model was released at 5. */
-    private var synthSteps = 5
+    /** Flow-matching steps per render: [flowSteps], unless launch arg -tts_steps overrides it. */
+    private var debugSteps: Int? = null
+    override var flowSteps: Int = 5
+    private val synthSteps get() = debugSteps ?: flowSteps
 
     override fun loadModel(modelDir: String): ModelConfig = loadModelFrom(
         // -tts_model_dir points at another copy of the model (e.g. a quantised one) for
@@ -130,8 +132,8 @@ class IosTtsEngine : TtsEngine {
                     )
                 }
             }
-            synthSteps = debugDefault("tts_steps")?.toIntOrNull()?.coerceIn(1, 16) ?: 5
-            println("[TTS] steps=$synthSteps ep=${ep ?: "cpu"} model=$modelDir")
+            debugSteps = debugDefault("tts_steps")?.toIntOrNull()?.coerceIn(1, 16)
+            println("[TTS] steps override=${debugSteps ?: "none"} ep=${ep ?: "cpu"} model=$modelDir")
 
             println("[TTS] Loading ONNX models...")
             dpSession = ortCall("DP session") { e -> ORTSession(env = env, modelPath = "$modelDir/duration_predictor.onnx", sessionOptions = opts, error = e) }
