@@ -45,11 +45,27 @@ class TtsSdk(private val config: TtsConfig) {
     private val speakMutex = Mutex()
 
     /**
+     * Flow-matching steps for the next live render; starts at [TtsConfig.flowSteps]. Lower it
+     * while the app needs the CPU for something else (speech renders faster and lighter, and
+     * below a point audibly worse — see [TtsConfig.flowSteps] for where), raise it back when it
+     * doesn't. Takes effect from the next piece rendered, never mid-render. Pre-rendered audio
+     * ([prerender]) is unaffected: it is always rendered at [TtsConfig.flowSteps] and always
+     * used; a piece cached from a live render is reused only when it was rendered with at least
+     * this many steps. Coerced to 1..16.
+     */
+    @kotlin.concurrent.Volatile
+    var flowSteps: Int = config.flowSteps
+        set(value) { field = value.coerceIn(1, 16) }
+
+    /** A rendered piece and the steps it was rendered with ([PRERENDERED] for prerender's). */
+    private class Rendered(val pcm: FloatArray, val steps: Int)
+
+    /**
      * Rendered pieces by (text, voice, language, rate): coaching repeats short cues ("Again.",
      * "Good.") constantly, and a cached one plays with no synthesis at all. Small and in-memory
      * (a 2 s piece is ~350 KB of floats).
      */
-    private val pcmCache = LinkedHashMap<String, FloatArray>()
+    private val pcmCache = LinkedHashMap<String, Rendered>()
     private val cacheLock = Mutex()
 
     /** Pieces from [prerender] when there's no [TtsConfig.phraseCacheDir]: kept in memory. */
@@ -89,28 +105,33 @@ class TtsSdk(private val config: TtsConfig) {
         eng: TtsEngine, text: String, voiceStyle: String, language: String, rate: Float, id: String? = null,
     ): FloatArray {
         val key = "$voiceStyle|$language|$rate|$text"
+        val steps = flowSteps
         cacheLock.withLock {
             pinnedCache[key]?.let {
                 if (id != null) callback?.onPieceRendered(id, text, 0, cached = true)
                 return it
             }
-            // Least-recently-used: a hit moves to the back, the front is evicted.
-            pcmCache.remove(key)?.let {
+            // Least-recently-used: a hit moves to the back, the front is evicted. A piece
+            // rendered with fewer steps than asked for now is not a hit: it renders again at
+            // the better setting and replaces the old one.
+            pcmCache[key]?.takeIf { it.steps >= steps }?.let {
+                pcmCache.remove(key)
                 pcmCache[key] = it
                 if (id != null) callback?.onPieceRendered(id, text, 0, cached = true)
-                return it
+                return it.pcm
             }
         }
         readPhrase(voiceStyle, language, rate, text)?.let { pcm ->
-            cacheLock.withLock { pcmCache[key] = pcm }
+            cacheLock.withLock { pcmCache[key] = Rendered(pcm, PRERENDERED) }
             if (id != null) callback?.onPieceRendered(id, text, 0, cached = true)
             return pcm
         }
         val started = kotlin.time.TimeSource.Monotonic.markNow()
-        val pcm = eng.synthesise(text, voiceStyle, language, rate)
+        val pcm = eng.synthesise(text, voiceStyle, language, rate, steps)
         if (id != null) callback?.onPieceRendered(id, text, started.elapsedNow().inWholeMilliseconds, cached = false)
         cacheLock.withLock {
-            pcmCache[key] = pcm
+            pcmCache.remove(key)
+            pcmCache[key] = Rendered(pcm, steps)
             while (pcmCache.size > 40) pcmCache.remove(pcmCache.keys.first())
         }
         return pcm
@@ -132,8 +153,7 @@ class TtsSdk(private val config: TtsConfig) {
     fun initialize() {
         engine?.release()
         val eng = PlatformEngineFactory.create()
-        val parsedConfig = eng.loadModel(config.modelDir)
-        eng.flowSteps = config.flowSteps
+        val parsedConfig = eng.loadModel(config.modelDir, config.inferenceThreads)
         engine = eng
         modelConfig = parsedConfig
 
@@ -276,7 +296,7 @@ class TtsSdk(private val config: TtsConfig) {
             if (have) continue
             if (!speakMutex.tryLock()) continue
             try {
-                val pcm = eng.synthesise(piece, style, "en", speechRate)
+                val pcm = eng.synthesise(piece, style, "en", speechRate, config.flowSteps)
                 if (path != null) writePhrase(path, pcm) else cacheLock.withLock { pinnedCache[key] = pcm }
                 rendered++
             } finally {
@@ -307,7 +327,7 @@ class TtsSdk(private val config: TtsConfig) {
         val cleanText = TextPreprocessor.preprocess(request.text)
             ?: throw TtsError.InvalidText("Text is empty after preprocessing")
 
-        val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
+        val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate, flowSteps)
         val wavBytes = WavEncoder.encode(pcm, mc.sampleRate)
 
         try {
@@ -339,7 +359,7 @@ class TtsSdk(private val config: TtsConfig) {
         val cleanText = TextPreprocessor.preprocess(request.text)
             ?: throw TtsError.InvalidText("Text is empty after preprocessing")
 
-        val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
+        val pcm = eng.synthesise(cleanText, voiceStyle, language, request.speechRate, flowSteps)
         return WavEncoder.encode(pcm, mc.sampleRate)
     }
 
@@ -362,7 +382,7 @@ class TtsSdk(private val config: TtsConfig) {
         val cleanText = TextPreprocessor.preprocess(request.text)
             ?: throw TtsError.InvalidText("Text is empty after preprocessing")
 
-        return eng.synthesise(cleanText, voiceStyle, language, request.speechRate)
+        return eng.synthesise(cleanText, voiceStyle, language, request.speechRate, flowSteps)
     }
 
     /** The sample rate of the loaded model, or null if not initialised. */
@@ -413,3 +433,6 @@ private fun fnv64(s: String): String {
     }
     return h.toULong().toString(16)
 }
+
+/** The steps recorded for a cached piece that came from [TtsSdk.prerender]: always reusable. */
+private const val PRERENDERED = Int.MAX_VALUE

@@ -46,20 +46,19 @@ class IosTtsEngine : TtsEngine {
         get() = _isPlaying
         private set(value) { _isPlaying = value }
 
-    /** Flow-matching steps per render: [flowSteps], unless launch arg -tts_steps overrides it. */
+    /** Launch arg -tts_steps, read at load: overrides the flow-matching steps every render asks for. */
     private var debugSteps: Int? = null
-    override var flowSteps: Int = 5
-    private val synthSteps get() = debugSteps ?: flowSteps
 
-    override fun loadModel(modelDir: String): ModelConfig = loadModelFrom(
+    override fun loadModel(modelDir: String, inferenceThreads: Int?): ModelConfig = loadModelFrom(
         // -tts_model_dir points at another copy of the model (e.g. a quantised one) for
         // speed/quality comparisons; ignored unless it exists.
         debugDefault("tts_model_dir")
             ?.let { if (it.startsWith("/")) it else "${documentsDir()}/$it" }
             ?.takeIf { NSFileManager.defaultManager.fileExistsAtPath(it) } ?: modelDir,
+        inferenceThreads,
     )
 
-    private fun loadModelFrom(modelDir: String): ModelConfig {
+    private fun loadModelFrom(modelDir: String, inferenceThreads: Int?): ModelConfig {
         release()
 
         val fm = NSFileManager.defaultManager
@@ -110,7 +109,10 @@ class IosTtsEngine : TtsEngine {
         try {
             val env = ortCall("ORTEnv") { e -> ORTEnv(loggingLevel = ORTLoggingLevel.ORTLoggingLevelWarning, error = e) }
             val opts = ortCall("ORTSessionOptions") { e -> ORTSessionOptions(error = e) }
-            ortCall("setIntraOpNumThreads") { e -> opts.setIntraOpNumThreads(2, error = e); true }
+            // -tts_intra overrides the configured thread count (see TtsConfig.inferenceThreads).
+            val threads = debugDefault("tts_intra")?.toIntOrNull()?.coerceIn(1, 8)
+                ?: inferenceThreads?.coerceIn(1, 8) ?: 2
+            ortCall("setIntraOpNumThreads") { e -> opts.setIntraOpNumThreads(threads.convert(), error = e); true }
             ortCall("setGraphOptimizationLevel") { e -> opts.setGraphOptimizationLevel(ORTGraphOptimizationLevel.ORTGraphOptimizationLevelAll, error = e); true }
             // -tts_ep coreml | coreml_nn | xnnpack: try another execution provider (the CPU one
             // takes whatever it can't run). coreml = ML Program format, coreml_nn = the older
@@ -128,12 +130,12 @@ class IosTtsEngine : TtsEngine {
                 }
                 "xnnpack" -> ortCall("appendXnnpack") { e ->
                     opts.appendXnnpackExecutionProviderWithOptions(
-                        ORTXnnpackExecutionProviderOptions().apply { intra_op_num_threads = 2 }, error = e,
+                        ORTXnnpackExecutionProviderOptions().apply { intra_op_num_threads = threads.convert() }, error = e,
                     )
                 }
             }
             debugSteps = debugDefault("tts_steps")?.toIntOrNull()?.coerceIn(1, 16)
-            println("[TTS] steps override=${debugSteps ?: "none"} ep=${ep ?: "cpu"} model=$modelDir")
+            println("[TTS] threads=$threads steps override=${debugSteps ?: "none"} ep=${ep ?: "cpu"} model=$modelDir")
 
             println("[TTS] Loading ONNX models...")
             dpSession = ortCall("DP session") { e -> ORTSession(env = env, modelPath = "$modelDir/duration_predictor.onnx", sessionOptions = opts, error = e) }
@@ -181,7 +183,7 @@ class IosTtsEngine : TtsEngine {
     }
 
     override fun synthesise(
-        text: String, voiceStyleId: String, language: String, speechRate: Float,
+        text: String, voiceStyleId: String, language: String, speechRate: Float, flowSteps: Int,
     ): FloatArray {
         require(speechRate > 0f) { "speechRate must be positive, was $speechRate" }
         val dpSess = dpSession ?: throw TtsError.ModelNotLoaded()
@@ -279,7 +281,7 @@ class IosTtsEngine : TtsEngine {
             val latentMaskTensor = createFloatTensor(latentMaskArray, longArrayOf(1, 1, latentLen.toLong()))
 
             // Step 4: VE denoising
-            val totalSteps = synthSteps
+            val totalSteps = debugSteps ?: flowSteps.coerceIn(1, 16)
             var xt = noise
             println("[TTS] Step 4: VE denoising ($totalSteps steps)...")
 

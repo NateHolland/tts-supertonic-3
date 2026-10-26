@@ -12,10 +12,19 @@ data class TtsConfig(
      */
     val phraseCacheDir: String? = null,
     /**
-     * Flow-matching steps per render. The model was released at 5; each step is roughly a
-     * fifth of the render. Where the floor is depends on the model and device: with the int8
-     * flow network, 4 still sounded right on a Galaxy A36 and 3 didn't, while on an iPhone 17 Pro
-     * 4 already did not (Oct 2026 listening test).
+     * Flow-matching steps per render when nothing asks for less: the starting value of
+     * `TtsSdk.flowSteps`, and what `TtsSdk.prerender` always renders at. The model was released
+     * at 5; each step is roughly a fifth of the render. Where the floor is depends on the model
+     * and device: with the int8 flow network, 4 still sounded right on a Galaxy A36 and 3
+     * didn't, while on an iPhone 17 Pro 4 already did not (Oct 2026 listening test). An app
+     * that must share the CPU lowers `TtsSdk.flowSteps` at runtime rather than this.
      */
     val flowSteps: Int = 5,
+    /**
+     * ONNX intra-op threads per model session, read once at `TtsSdk.initialize()`. Null is the
+     * platform default (Android: the core count clamped to 2..6; iOS: 2). Fewer threads leave
+     * more of the CPU to whatever runs alongside synthesis, at the cost of render time; a
+     * device debug override (`debug.tts.intra` / `-tts_intra`) wins over this.
+     */
+    val inferenceThreads: Int? = null,
 )

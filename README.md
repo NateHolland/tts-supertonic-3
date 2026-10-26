@@ -13,7 +13,7 @@ running locally through ONNX Runtime — no network calls at inference time.
 Add the dependency to your `build.gradle.kts`:
 
 ```kotlin
-implementation("coach.kima.tts:tts-supertonic-3:1.2.0")
+implementation("coach.kima.tts:tts-supertonic-3:1.3.0")
 ```
 
 ## Model Setup
@@ -112,6 +112,29 @@ sdk.speak(SpeakRequest(
     volume = 0.8f,
 ))
 ```
+
+### Synthesis quality and CPU
+
+Rendering is the expensive part. Two knobs trade it against audio quality:
+
+```kotlin
+val sdk = TtsSdk(TtsConfig(
+    modelDir = modelPath,
+    flowSteps = 5,          // steps per render when nothing asks for less (model default)
+    inferenceThreads = null, // ONNX threads per session; null = platform default
+))
+sdk.initialize()
+
+// While the app needs the CPU for something else (e.g. live detection), ask for a
+// lighter render; raise it back when it doesn't. Applies from the next piece rendered.
+sdk.flowSteps = 4
+```
+
+`flowSteps` is the number of flow-matching steps per render: each step is roughly a
+fifth of the render time, and below a device-dependent floor (around 3-4) the voice
+audibly degrades. `prerender()` always renders at the configured value and that audio
+is always used, so lowering the live value only affects lines that are not already
+cached. `inferenceThreads` is read once at `initialize()`.
 
 ### Save to file
 

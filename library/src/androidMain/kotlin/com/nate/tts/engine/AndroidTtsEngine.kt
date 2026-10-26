@@ -107,12 +107,10 @@ class AndroidTtsEngine : TtsEngine {
 
     // ── Model Loading ────────────────────────────────────────────────────
 
-    /** Flow-matching steps per render: [flowSteps], unless debug.tts.steps overrides it. */
+    /** debug.tts.steps, read at load: overrides the flow-matching steps every render asks for. */
     private var debugSteps: Int? = null
-    override var flowSteps: Int = 5
-    private val synthSteps get() = debugSteps ?: flowSteps
 
-    override fun loadModel(modelDir: String): ModelConfig {
+    override fun loadModel(modelDir: String, inferenceThreads: Int?): ModelConfig {
         release()
 
         // debug.tts.modeldir points at another copy of the model (e.g. a quantised one) for
@@ -152,10 +150,11 @@ class AndroidTtsEngine : TtsEngine {
             // halved synthesis speed with no detection gain; ONNX ignores intra-op thread
             // affinities on Android, so pinning to the little cores did nothing; 1, 3 or 4
             // threads traded detection-during-speech against detection-otherwise, net worse.
-            val intraOp = debugProp("debug.tts.intra")?.toIntOrNull()?.coerceIn(1, 8) ?: cores.coerceIn(2, 6)
+            val intraOp = debugProp("debug.tts.intra")?.toIntOrNull()?.coerceIn(1, 8)
+                ?: inferenceThreads?.coerceIn(1, 8) ?: cores.coerceIn(2, 6)
             val spin = debugProp("debug.tts.spin")
             debugSteps = debugProp("debug.tts.steps")?.toIntOrNull()?.coerceIn(1, 16)
-            Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores), spinning=${spin ?: "default"}, bestOf=$synthBestOfN, steps=$synthSteps, ep=${debugProp("debug.tts.ep") ?: "cpu"}, model=${dir.absolutePath}")
+            Log.i(TAG, "ONNX intra-op threads: $intraOp (of $cores cores), spinning=${spin ?: "default"}, bestOf=$synthBestOfN, steps override=${debugSteps ?: "none"}, ep=${debugProp("debug.tts.ep") ?: "cpu"}, model=${dir.absolutePath}")
             val opts = OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(intraOp)
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
@@ -244,7 +243,7 @@ class AndroidTtsEngine : TtsEngine {
     }
 
     override fun synthesise(
-        text: String, voiceStyleId: String, language: String, speechRate: Float,
+        text: String, voiceStyleId: String, language: String, speechRate: Float, flowSteps: Int,
     ): FloatArray {
         require(speechRate > 0f) { "speechRate must be positive, was $speechRate" }
         val env = ortEnvironment ?: throw TtsError.ModelNotLoaded()
@@ -345,7 +344,7 @@ class AndroidTtsEngine : TtsEngine {
                 longArrayOf(1, 1, latentLen.toLong())
             ).also { tensorsToClose.add(it) }
 
-            val totalSteps = synthSteps
+            val totalSteps = debugSteps ?: flowSteps.coerceIn(1, 16)
             val trimLength = min((sampleRate * duration).toInt(), Int.MAX_VALUE)
 
             // ── Steps 4+5: best-of-N flow matching + vocoding ──
@@ -420,7 +419,7 @@ class AndroidTtsEngine : TtsEngine {
 
             val audio = if (candidates.size <= 1) candidates[0] else candidates[selectBestCandidate(candidates)]
 
-            Log.i(TAG, "SynthTiming: ${(System.nanoTime() - synthStartNs) / 1_000_000}ms for ${audio.size / sampleRate.toFloat()}s of audio, bestOf=$synthBestOfN, steps=$synthSteps")
+            Log.i(TAG, "SynthTiming: ${(System.nanoTime() - synthStartNs) / 1_000_000}ms for ${audio.size / sampleRate.toFloat()}s of audio, bestOf=$synthBestOfN, steps=$totalSteps")
             Log.i(TAG, "Synthesis done: ${audio.size} samples (${audio.size / sampleRate.toFloat()}s) " +
                 "min=${audio.min()} max=${audio.max()}")
 

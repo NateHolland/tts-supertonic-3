@@ -3,19 +3,21 @@ package com.nate.tts.engine
 import com.nate.tts.config.ModelConfig
 
 interface TtsEngine {
-    fun loadModel(modelDir: String): ModelConfig
-
     /**
-     * Flow-matching steps per render ([com.nate.tts.config.TtsConfig.flowSteps]). Fewer is
-     * faster and, past a point, audibly worse; a debug override on the device wins over this.
+     * @param inferenceThreads ONNX intra-op threads per session
+     *   ([com.nate.tts.config.TtsConfig.inferenceThreads]); null picks the platform default.
      */
-    var flowSteps: Int
+    fun loadModel(modelDir: String, inferenceThreads: Int? = null): ModelConfig
+
     /**
      * @param speechRate how fast to speak, 1.0 being the model's own pace; it
      *   scales the predicted duration, so 2.0 takes half as long. Must be > 0.
+     * @param flowSteps flow-matching steps for this render. Fewer is faster and, past a
+     *   point, audibly worse; a debug override on the device wins over this.
      */
     fun synthesise(
         text: String, voiceStyleId: String, language: String, speechRate: Float = 1.0f,
+        flowSteps: Int = 5,
     ): FloatArray
 
     /**
