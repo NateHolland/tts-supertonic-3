@@ -1,0 +1,72 @@
+name: TTSSample
+options:
+  bundleIdPrefix: com.nate.tts
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "16.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+  configs:
+    Debug:
+      KOTLIN_FRAMEWORK_BUILD_TYPE: debug
+    Release:
+      KOTLIN_FRAMEWORK_BUILD_TYPE: release
+
+targets:
+  TTSSample:
+    type: application
+    platform: iOS
+    sources:
+      - path: TTSSample
+        type: group
+      - path: Supertone_supertonic-3
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        INFOPLIST_FILE: TTSSample/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.nate.tts.sample
+        # Search paths must be SDK-conditional. Device and simulator builds of
+        # onnxruntime_objc and ComposeApp sit side by side under the same names,
+        # so listing both sets unconditionally lets the linker take whichever
+        # comes first regardless of what is being built — producing
+        #   ld: building for 'iOS-simulator', but linking in object file
+        #       (.../Debug-iphoneos/...) built for 'iOS'
+        # It only appears once both platforms have been built at least once.
+        "FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]":
+          - "$(SRCROOT)/../sample/build/bin/iosSimulatorArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework"
+          - "$(SRCROOT)/../library/build/cocoapods/synthetic/ios/build/Debug-iphonesimulator/onnxruntime-objc"
+          - "$(SRCROOT)/../library/build/cocoapods/synthetic/ios/build/Debug-iphonesimulator/XCFrameworkIntermediates/onnxruntime-c"
+        "FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]":
+          - "$(SRCROOT)/../sample/build/bin/iosArm64/$(KOTLIN_FRAMEWORK_BUILD_TYPE)Framework"
+          - "$(SRCROOT)/../library/build/cocoapods/synthetic/ios/build/Debug-iphoneos/onnxruntime-objc"
+          - "$(SRCROOT)/../library/build/cocoapods/synthetic/ios/build/Debug-iphoneos/XCFrameworkIntermediates/onnxruntime-c"
+        OTHER_LDFLAGS:
+          - "-ObjC"
+          - "-lc++"
+          - "-framework ComposeApp"
+          - "-framework onnxruntime_objc"
+          - "-force_load"
+          - "$(SRCROOT)/../library/build/cocoapods/synthetic/ios/build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)/XCFrameworkIntermediates/onnxruntime-c/onnxruntime.framework/onnxruntime"
+          - "-weak_framework CoreML"
+    preBuildScripts:
+      - name: "Build Compose Multiplatform Framework"
+        script: |
+          export JAVA_HOME="${JAVA_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
+          export PATH="$JAVA_HOME/bin:/opt/homebrew/bin:$PATH"
+          cd "$SRCROOT/.."
+          if [ "$CONFIGURATION" = "Debug" ]; then
+            BUILD_TYPE="Debug"
+          else
+            BUILD_TYPE="Release"
+          fi
+          if [ "$PLATFORM_NAME" = "iphonesimulator" ]; then
+            ./gradlew :sample:link${BUILD_TYPE}FrameworkIosSimulatorArm64
+          else
+            ./gradlew :sample:link${BUILD_TYPE}FrameworkIosArm64
+          fi
+        basedOnDependencyAnalysis: false
